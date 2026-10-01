@@ -1,23 +1,23 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-鍏嶈垂鑺傜偣鑷姩娴嬫椿璁㈤槄姹?v2 鈥?鍏ㄥ崗璁?路 楂樼簿搴?路 浣庤鏉€
+免费节点自动测活订阅池 v2 — 全协议 · 高精度 · 低误杀
 ====================================================
 
-鏋舵瀯锛堜笁闃舵娴佹按绾匡級:
-  1. 鎶撳彇璁㈤槄婧?鈫?瑙ｆ瀽鍏ㄩ儴鍗忚 URI 涓虹粺涓€鑺傜偣瀵硅薄
-     (vless/vmess/trojan/ss/hysteria2/tuic/anytls + reality + 鍏ㄩ儴浼犺緭灞?
-  2. 鐪熷疄娴嬫椿锛坰ing-box v1.14 鍐呮牳锛岄€愯妭鐐?SOCKS 鍏ョ珯 + 鑺傜偣鍑虹珯锛?
-     - 闃舵A 绔彛棰勬: TCP/QUIC 鐩磋繛鎻℃墜, 蹇€熶涪寮冩绔彛 (鍓婂噺 90% 鏃犳晥宸ヤ綔)
-     - 闃舵B 鐪熷疄鎺㈡祴: 澶?URL 鎺㈡祴 (gstatic 204 / cloudflare trace) 
-       + 缁忎唬鐞嗗彇鐪熷疄鍑哄彛 IP (api.ip.sb/geoip 鈫?涓€娆℃嬁 country+asn+isp)
-       + Cloudflare 闄愭椂涓嬭浇娴嬮€?鈫?鏂祦鑺傜偣璇嗗埆 (鍚炲悙閲忎笉瓒?
-       + cloudflare trace tls=VERIFIED 鈫?MITM/鍔寔鑺傜偣璇嗗埆
-  3. 鍒嗙被涓庡鍑?
-     - 鍥藉: 鍑哄彛 IP ip-api.com 鎵归噺(45req/min 鍏嶈垂) 鈫?MaxMind GeoLite2 鍏滃簳
-     - 灞炴€? hosting=true/CDN缃戞/IDC ASN 鈫?鏈烘埧 | mobile=true 鈫?绉诲姩
-            | 杩愯惀鍟嗙櫧鍚嶅崟+rDNS 鈫?瀹跺
-     - 鍘婚噸: 鍑哄彛IP+绔彛 鍞竴鍖? 瀹跺鍖轰弗鏍奸槻鍚孖P鍒峰睆
+架构（三阶段流水线）:
+  1. 抓取订阅源 → 解析全部协议 URI 为统一节点对象
+     (vless/vmess/trojan/ss/hysteria2/tuic/anytls + reality + 全部传输层)
+  2. 真实测活（sing-box v1.14 内核，逐节点 SOCKS 入站 + 节点出站）:
+     - 阶段A 端口预检: TCP/QUIC 直连握手, 快速丢弃死端口 (削减 90% 无效工作)
+     - 阶段B 真实探测: 多 URL 探测 (gstatic 204 / cloudflare trace) 
+       + 经代理取真实出口 IP (api.ip.sb/geoip → 一次拿 country+asn+isp)
+       + Cloudflare 限时下载测速 → 断流节点识别 (吞吐量不足)
+       + cloudflare trace tls=VERIFIED → MITM/劫持节点识别
+  3. 分类与导出:
+     - 国家: 出口 IP ip-api.com 批量(45req/min 免费) → MaxMind GeoLite2 兜底
+     - 属性: hosting=true/CDN网段/IDC ASN → 机房 | mobile=true → 移动
+            | 运营商白名单+rDNS → 家宽
+     - 去重: 出口IP+端口 唯一化, 家宽区严格防同IP刷屏
 """
 
 import os
@@ -45,12 +45,12 @@ try:
     import yaml
     import maxminddb
 except ImportError as e:
-    print(f"[!] 缂哄皯渚濊禆: {e} 鈥?璇峰厛 pip install -r requirements.txt")
+    print(f"[!] 缺少依赖: {e} — 请先 pip install -r requirements.txt")
     sys.exit(1)
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
-# 閰嶇疆
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# ══════════════════════════════════════════════════════════════════
+# 配置
+# ══════════════════════════════════════════════════════════════════
 
 SOURCE_URLS = [
     "https://wild-cloud-9893.heleimail.workers.dev",
@@ -79,47 +79,47 @@ BASEDIR = os.path.dirname(WORKDIR)                              # repo root
 RUNTIME_DIR = os.path.join(BASEDIR, "runtime")                  # kernels & db
 SINGBOX_BIN = os.path.join(RUNTIME_DIR, "sing-box")
 
-# --- 娴嬫椿闃堝€?(姣/绉? ---
-# 鈽?鍒嗗眰瓒呮椂: 棣栧嚮瀹?(12s 瀹规參鑺傜偣), 閲嶈瘯绐?(4s 蹇€熸斁寮冩鑺傜偣)
-#   渚濇嵁 CI 瀹炴祴: 25 鍒嗛挓閲?~60% 鏃堕棿鐑у湪姝昏妭鐐?3脳12s 婊￠閲嶈瘯涓?
-PROBE_TIMEOUT          = 12      # 娲绘€ч鍑昏秴鏃?(绉? 鈥?瀹圭撼鎱㈠惎鍔ㄨ妭鐐?
-PROBE_RETRY_TIMEOUT    = 4       # 娲绘€ч噸璇曡秴鏃?(绉? 鈥?姝昏妭鐐瑰揩閫熸斁寮?
-PORT_KNOCK_TIMEOUT     = 2.5     # 绔彛棰勬瓒呮椂
-IP_ECHO_TIMEOUT        = 6.0     # 鍑哄彛 IP 妫€娴嬭秴鏃?
-SPEED_TEST_BYTES       = 2_500_000   # 2.5MB 涓嬭浇娴嬮€?(2.5MB 瓒充互绠楀噯鍚炲悙涓?< 70KB/s 鍒ゅ畾绾夸笉鍙?
-SPEED_TEST_BUDGET      = 5.0         # 娴嬮€熸椂闂撮绠?(绉? 鈥?2.5MB@70KB/s=36s 蹇呮柇娴? 5s 棰勭畻瓒冲鍒ゅ瀷
-SPEED_MIN_BYTES_PER_S  = 70_000      # 鍚炲悙 < 70KB/s 鍒ゅ畾鏂祦/涓嶅彲鐢?(鏍囧噯涓嶅彉)
-IP_ECHO_URLS = [                    # 缁忎唬鐞嗚幏鍙栧嚭鍙?IP (澶氳矾鍐椾綑)
+# --- 测活阈值 (毫秒/秒) ---
+# ★ 分层超时: 首击宽 (12s 容慢节点), 重试窄 (4s 快速放弃死节点)
+#   依据 CI 实测: 25 分钟里 ~60% 时间烧在死节点 3×12s 满额重试上
+PROBE_TIMEOUT          = 12      # 活性首击超时 (秒) — 容纳慢启动节点
+PROBE_RETRY_TIMEOUT    = 4       # 活性重试超时 (秒) — 死节点快速放弃
+PORT_KNOCK_TIMEOUT     = 2.5     # 端口预检超时
+IP_ECHO_TIMEOUT        = 6.0     # 出口 IP 检测超时
+SPEED_TEST_BYTES       = 2_500_000   # 2.5MB 下载测速 (2.5MB 足以算准吞吐且 < 70KB/s 判定线不变)
+SPEED_TEST_BUDGET      = 5.0         # 测速时间预算 (秒) — 2.5MB@70KB/s=36s 必断流, 5s 预算足够判型
+SPEED_MIN_BYTES_PER_S  = 70_000      # 吞吐 < 70KB/s 判定断流/不可用 (标准不变)
+IP_ECHO_URLS = [                    # 经代理获取出口 IP (多路冗余)
     "https://api.ip.sb/geoip",                         # JSON: country_code/asn/isp
     "https://ipinfo.io/json",                          # JSON: country/org
     "http://ip-api.com/json/?fields=status,query,countryCode,isp,org,as",  # HTTP free
 ]
-LIVENESS_URLS = [                    # 娲绘€ф帰娴?URL (鍏ㄩ儴瑕佹眰浠ｇ悊閾捐矾瀹屾暣)
-    "https://www.gstatic.com/generate_204",       # 瀹炴祴 204 OK
+LIVENESS_URLS = [                    # 活性探测 URL (全部要求代理链路完整)
+    "https://www.gstatic.com/generate_204",       # 实测 204 OK
     "https://www.google.com/generate_204",
     "http://connectivitycheck.gstatic.com/generate_204",
 ]
-SPEED_TEST_URLS = [               # 娴嬮€熺鐐瑰璺?(瀹炴祴閮ㄥ垎鑺傜偣鍟嗗睆钄?speed.cloudflare.com)
+SPEED_TEST_URLS = [               # 测速端点多路 (实测部分节点商屏蔽 speed.cloudflare.com)
     "https://speed.cloudflare.com/__down?bytes=" + str(SPEED_TEST_BYTES),
     "https://cachefly.cachefly.net/10mb.test",
 ]
-TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"      # warp=on 妫€娴嬪澹宠妭鐐?
-MAX_WORKERS_TEST    = 48            # 鍚屾椂 sing-box 瀹炴祴鑺傜偣鏁?(Azure 2C7G 瀹炴祴 24鈫?8 绋冲畾; sing-box 鍗曞疄渚?< 30MB)
+TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"      # warp=on 检测套壳节点
+MAX_WORKERS_TEST    = 48            # 同时 sing-box 实测节点数 (Azure 2C7G 实测 24→48 稳定; sing-box 单实例 < 30MB)
 MAX_WORKERS_FETCH   = 8
 MAX_WORKERS_CLASSIFY = 32
 
-# ip-api.com 鍏嶈垂鎵归噺: 15 req/min, 姣?req 鈮?00 IP (浠?HTTP)
+# ip-api.com 免费批量: 15 req/min, 每 req ≤100 IP (仅 HTTP)
 IP_API_BATCH_URL = "http://ip-api.com/batch?fields=status,countryCode,isp,org,as,asname,reverse,mobile,proxy,hosting,query"
 IP_API_BATCH_SIZE = 100
-IP_API_BATCH_RPS_INTERVAL = 4.2     # 60/15s 鈮?姣?4.2s 涓€鎵?
+IP_API_BATCH_RPS_INTERVAL = 4.2     # 60/15s ≈ 每 4.2s 一批
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
-# 鍑哄彛 IP 鎯呮姤 (鏈湴绂荤嚎鍏滃簳)
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# ══════════════════════════════════════════════════════════════════
+# 出口 IP 情报 (本地离线兜底)
+# ══════════════════════════════════════════════════════════════════
 
-# Cloudflare 瀹樻柟 Anycast 鍏ㄧ綉娈?(鍛戒腑鍗?CDN 浠绘挱, 缁濋潪瀹跺)
+# Cloudflare 官方 Anycast 全网段 (命中即 CDN 任播, 绝非家宽)
 CLOUDFLARE_IP_NETWORKS = [ipaddress.ip_network(n) for n in (
     "173.245.48.0/20","103.21.244.0/22","103.22.200.0/22","103.31.4.0/22",
     "141.101.64.0/18","108.162.192.0/18","190.93.240.0/20","188.114.96.0/20",
@@ -127,7 +127,7 @@ CLOUDFLARE_IP_NETWORKS = [ipaddress.ip_network(n) for n in (
     "104.24.0.0/14","172.64.0.0/13","131.0.72.0/22",
 )]
 
-# Google / Fastly / Akamai 绛夊父瑙?CDN 涓庝簯鍏ュ彛娈?(鍛戒腑鍗虫爣 CDN/鏈烘埧)
+# Google / Fastly / Akamai 等常见 CDN 与云入口段 (命中即标 CDN/机房)
 CDN_IP_NETWORKS_EXTRA = [ipaddress.ip_network(n) for n in (
     # Google
     "8.8.4.0/24","8.8.8.0/24","8.34.208.0/20","8.35.192.0/20","34.64.0.0/10","35.184.0.0/13",
@@ -139,14 +139,14 @@ CDN_IP_NETWORKS_EXTRA = [ipaddress.ip_network(n) for n in (
     "23.235.32.0/20","43.249.72.0/22","103.244.50.0/24","103.245.222.0/23",
     "104.156.80.0/20","140.248.64.0/18","146.75.0.0/16","151.101.0.0/16",
     "157.52.64.0/18","167.82.0.0/17","199.232.0.0/16","204.129.196.0/22",
-    # Akamai (鏍稿績娈?
+    # Akamai (核心段)
     "23.32.0.0/13","23.64.0.0/14","23.192.0.0/11","23.197.0.0/16",
     "95.100.0.0/15","104.64.0.0/10","184.24.0.0/13","184.84.0.0/14",
-    # Cloudflare Spectrum / 鎵樼鍏ュ彛
+    # Cloudflare Spectrum / 托管入口
     "104.16.0.0/12",
 )]
 
-# 宸茬煡浜?鏈烘埧 ASN (绂荤嚎鍏滃簳鐢? 鍦ㄧ嚎 ip-api hosting=true 涓轰富鍒ゆ嵁)
+# 已知云/机房 ASN (离线兜底用; 在线 ip-api hosting=true 为主判据)
 DATACENTER_ASNS = {
     13335,  # Cloudflare
     16509, 14618,  # AWS
@@ -158,93 +158,93 @@ DATACENTER_ASNS = {
     31898, 63949,  # Oracle
     45102,  # Alibaba
     132203,  # Tencent
-    20473,  # Choopa/Vultr 鏃╂湡
+    20473,  # Choopa/Vultr 早期
     60068,  # Datacamp (CDN77)
     55081,  # Hostinger
     197540,  # Hostinger EU
     51167,  # Contabo
     8560,  # 1&1 / IONOS
     42708,  # IONOS
-    201814, 49981,  # Hosthatch/Hostkey 绫?
-    212238, 46652,  # Serverius/OVH 绫?
-    141995, 200019, 136907, 39351, 9009,  # M247/Hosthatch 绛?
-    174, 3356, 1299, 2914, 6939,  # 楠ㄥ共 (Cogent/Lumen/Arelion/NTT/Hurricane)
+    201814, 49981,  # Hosthatch/Hostkey 类
+    212238, 46652,  # Serverius/OVH 类
+    141995, 200019, 136907, 39351, 9009,  # M247/Hosthatch 等
+    174, 3356, 1299, 2914, 6939,  # 骨干 (Cogent/Lumen/Arelion/NTT/Hurricane)
     199524, 206096, 49505,  # Selectel/WorldStream
     62240, 49304, 34665, 209242, 219337, 44477,
-    200651, 202685, 210644, 205628, 51852, 204544, 397373, 140224,  # 灏忓瀷 IDC
-    54866,  # Parsebian/HydraTransit 绫?
-    45899,  # VNPT 浜? 鏍囪涓?IDC
-    # 鈽?瀹炴祴婕忕綉: 鏀惰喘瀹跺娈?浼 DSL rDNS 鐨勪簯杈圭綉缁?(ip-api proxy=true 妗堜緥琛ュ厖)
-    62610,  # Zenlayer (AS62610, rDNS 甯?dsl.speakeasy.net 浣?proxy=true)
-    60205,  # 62610 鍏宠仈娈?
-    8342,  # Deltacomputers/Evrasia 绫?
-    9009, 47692, 62041, 56630, 57502,  # Serverius/ProXmedia/Clouvider 绫?
+    200651, 202685, 210644, 205628, 51852, 204544, 397373, 140224,  # 小型 IDC
+    54866,  # Parsebian/HydraTransit 类
+    45899,  # VNPT 云? 标记为 IDC
+    # ★ 实测漏网: 收购家宽段/伪装 DSL rDNS 的云边网络 (ip-api proxy=true 案例补充)
+    62610,  # Zenlayer (AS62610, rDNS 带 dsl.speakeasy.net 但 proxy=true)
+    60205,  # 62610 关联段
+    8342,  # Deltacomputers/Evrasia 类
+    9009, 47692, 62041, 56630, 57502,  # Serverius/ProXmedia/Clouvider 类
 }
 
-# 姘戠敤瀹藉甫 ASN 鐧藉悕鍗?(绂荤嚎鍏滃簳; 鍏抽敭鍥藉涓绘祦杩愯惀鍟?
+# 民用宽带 ASN 白名单 (离线兜底; 关键国家主流运营商)
 RESIDENTIAL_ASNS = {
-    # 鍙版咕
-    3462,    # Chunghwa Telecom (涓崕鐢典俊)
-    9924, 17709, 4780, 18049,  # 浜氬お鐢典俊/杩滀紶/鍙版咕澶у摜澶?鍑摌
-    9269, 3491,  # 鍙版咕纭曠綉/鍜屽畤瀹介
-    # 棣欐腐
+    # 台湾
+    3462,    # Chunghwa Telecom (中华电信)
+    9924, 17709, 4780, 18049,  # 亚太电信/远传/台湾大哥大/凯擘
+    9269, 3491,  # 台湾硕网/和宇宽频
+    # 香港
     4760, 476, 4515, 9229, 9266, 10103,  # PCCW/HKT/CUHK/HGC/HKBN/HKTBB
     9059, 38861,  # Hong Kong Broadband
-    # 鏃ユ湰
+    # 日本
     4713, 2516, 17676, 4721, 2497, 9605, 17511, 9318, 2518, 20193,
     # Softbank/NTT Communications/KDDI/IIJ/Sony/Plala/@nifty/JCN
     4766, 3786, 17816, 9357,
-    # 闊╁浗
+    # 韩国
     4713, 9318, 17816, 9357, 4766,  # KT/LG/SK  
-    # 缇庡浗
+    # 美国
     701, 7018, 7922, 20115, 22773, 10796, 20057, 11427, 10507, 6128,
     33363, 21928, 10777, 33660, 33661, 33662, 36466, 53417, 55136,
     20057, 19024, 12271, 11404, 6983, 33554, 7155, 30162, 10790,
     # Comcast (7922/33487/22263...) / Charter (20115/10796/20057) / Cox / AT&T / Verizon
     702, 703, 704, 705, 706, 709, 710, 711, 712, 713, 714, 715,  # legacy Verizon
-    2828, 20001, 3549,  # CenturyLink/Level3 (閮ㄥ垎涓哄瀹?
+    2828, 20001, 3549,  # CenturyLink/Level3 (部分为家宽)
     6167, 6162, 7018,  # AT&T
     5056,  # Cox East
     10796,  # Charter
     11351,  # TWC
     6128,  # Atlantis
-    # 鑻卞浗
+    # 英国
     2856, 5607, 20650, 13285, 12576, 12725, 19541, 33950, 5413,
     # BT/TalkTalk/Orange/Virgin/Plusnet/Sky/Eclipse
-    # 寰峰浗
+    # 德国
     3320, 3209, 6805, 8888, 9145, 13237, 15366, 20879, 16097, 15594,
-    # DT/Vodafone/EWE/netcup/Telef贸nica
-    # 娉曞浗
+    # DT/Vodafone/EWE/netcup/Telefónica
+    # 法国
     3215, 12322, 15557, 5410, 21590, 22869, 8228, 8220, 12670,
     # Orange/Free/SFR/Bouygues/LDN/9.tel
-    # 鑽峰叞 / 姣斿埄鏃?
+    # 荷兰 / 比利时
     33915, 20857, 5418, 6777, 15535, 6830, 8683,
     # KPN/Ziggo/Tele2/Solcon/Proximus/Telenet
-    # 鍔犳嬁澶?
+    # 加拿大
     577, 6539, 812, 7992, 22995, 23498, 30645, 11260, 5645, 13331,
     # Bell/Rogers/Corus/Cogeco/Videotron/Telus
-    # 婢冲ぇ鍒╀簹 / 鏂拌タ鍏?
+    # 澳大利亚 / 新西兰
     1221, 4764, 4761, 4747, 4802, 4804, 38293, 9443, 23871, 4771,
     # Telstra/Optus/iinet/AAPT/Exetel/SparkNZ
-    # 鏂板姞鍧?/ 椹潵瑗夸簹
+    # 新加坡 / 马来西亚
     9506, 9224, 10091, 4657, 32308, 55553, 177545, 9534, 17971, 24210,
     # Singtel/StarHub/M1/MyRepublic/TM/Maxis/Time
-    # 宸磋タ / 鎷夌編
+    # 巴西 / 拉美
     28573, 26599, 28598, 22085, 27699, 11014, 16832, 16397, 26615,
     # Claro/Vivo/Algar/Brisanet
-    # 鍦熻€冲叾 / 淇勭綏鏂?/ 鍝堣惃鍏?
+    # 土耳其 / 俄罗斯 / 哈萨克
     9121, 34984, 15924, 31103, 47853, 25513, 12714, 8359, 12389,
-    # T眉rk Telekom/Vodafone TR/MTS/Rostelecom/Kazakhtelecom
-    # 鎰忓ぇ鍒?/ 瑗跨彮鐗?
+    # Türk Telekom/Vodafone TR/MTS/Rostelecom/Kazakhtelecom
+    # 意大利 / 西班牙
     3269, 30722, 12874, 12392, 12474, 3352, 12479, 12430,
-    # Telecom Italia/Fastweb/Vodafone IT/Telef贸nica ES
-    # 鍗板害 / 瓒婂崡 / 娉板浗 / 鑿插緥瀹?/ 鍗板凹
+    # Telecom Italia/Fastweb/Vodafone IT/Telefónica ES
+    # 印度 / 越南 / 泰国 / 菲律宾 / 印尼
     55836, 9829, 9498, 17813, 45899, 7552, 9675, 7568, 45773, 45543,
     7590, 17457, 7552, 131293, 9336, 23969, 17816, 24099, 38251,
-    # 鍗板凹 Telkomsel/Indosat/Smartfren; 瓒婂崡 Viettel/FPT; 娉板浗 AIS/True
+    # 印尼 Telkomsel/Indosat/Smartfren; 越南 Viettel/FPT; 泰国 AIS/True
 }
 
-# rDNS / ISP 鍚嶇О鍏抽敭璇?(澶у皬鍐欎笉鏁忔劅; 绂荤嚎鍏滃簳)
+# rDNS / ISP 名称关键词 (大小写不敏感; 离线兜底)
 IDC_NAME_PATTERNS = [
     "hosting", "hoster", "datacenter", "data center", "cloud", "server",
     "vps", "dedicated", "colo", "colocation", "compute", "storage",
@@ -259,28 +259,28 @@ IDC_NAME_PATTERNS = [
 ]
 
 RESIDENTIAL_NAME_PATTERNS = [
-    # 閫氱敤瀹跺鐗瑰緛
+    # 通用家宽特征
     "broadband", "pppoe", "pppoa", "dsl", "cable", "fiber", "ftth",
     "fibre", "dynamic", "dial", "dialup", "residential", "home",
     "consumer", "cust", "customer", "subscriber", "pool", "dynamic-ip",
-    # 鍙版咕
+    # 台湾
     "chunghwa", "hinet", "taiwanmobile", "twn", "aptg", "kbro",
     "tfn", "sparq", "seednet", "data communication business group",
-    # 棣欐腐
+    # 香港
     "hkbn", "hong kong broadband", "pccw", "hkt", "hgc", "smartone",
     "netvigator", "citic telecom", "i-cable", "hk cable",
-    # 鏃ユ湰
+    # 日本
     "softbank", "ocn", "plala", "so-net", "iiJmio home", "eonet",
     "kddi", "jcom", "au broadband", "biglobe", "nifty",
-    # 闊╁浗
+    # 韩国
     "korea telecom", "kt corp", "sk broadband", "lgu+", "lg uplus",
-    # 缇庡浗
+    # 美国
     "comcast", "charter communications", "spectrum", "cox communications",
     "at&t", "at and t", "bellsouth", "sbc internet", "qwest", "centurylink",
     "verizon fios", "verizon online", "frontier communications", "windstream",
     "altice", "optimum online", "rcn", "wave broadband", "consolidated",
     "hughes", "viasat", "starlink", "mediaserv",
-    # 娆ф床
+    # 欧洲
     "deutsche telekom", "telekom deutschland", "vodafone d2", "kabel deutschland",
     "british telecom", "bt broadband", "virgin media", "sky uk", "talktalk",
     "orange sa", "free SAS".lower(), "sfr", "bouygues", "bbox", "numericable",
@@ -290,14 +290,14 @@ RESIDENTIAL_NAME_PATTERNS = [
     "swisscom", "a1 telekom", "magyar telekom", "o2 czech",
     "telia sweden", "telenor", "tele2 sweden", "bredband2",
     "rostelecom home", "mgts", "ertelecom", "dom.ru", "mtu-moscow",
-    # 浜氬お鍏朵粬
+    # 亚太其他
     "singtel", "starhub", "m1 limited", "myrepublic", "viewqwest",
     "maxis", "unifi", "time dotcom", "tm net", "celcom",
     "ais", "true internet", "3bb", "dtac tri", "ntc net",
     "viettel", "vnpt", "fpt telecom", "cmc telecom", "vinaphone",
     "pldt", "globe telecom", "converge ict", "sky broadband ph",
     "telkomsel", "indosat", "xl axiata", "biznet networks", "first media",
-    # 鎷夌編 / 鍦熻€冲叾 / 鍏朵粬
+    # 拉美 / 土耳其 / 其他
     "claro", "vivo", "tim brasil", "oi internet", "net servicos",
     "turk telekom", "superonline", "ttk", "kablonet", "vodafone net",
     " kazakhtelecom", "beeline kz", "izatelecom",
@@ -305,7 +305,7 @@ RESIDENTIAL_NAME_PATTERNS = [
     "spark nz", "vodafone nz", "2degrees", "orcon", "slingshot",
 ]
 
-# 鍗忚 鈫?鍏ㄧО (鍛藉悕鐢?
+# 协议 → 全称 (命名用)
 PROTOCOL_LABELS = {
     "vless": "VLESS", "vmess": "VMESS", "trojan": "Trojan",
     "ss": "Shadowsocks", "hysteria2": "Hysteria2", "tuic": "TUIC",
@@ -313,53 +313,53 @@ PROTOCOL_LABELS = {
 }
 
 COUNTRY_NAMES = {
-    "HK": "涓浗棣欐腐 (Hong Kong)", "TW": "涓浗鍙版咕 (Taiwan)", "JP": "鏃ユ湰 (Japan)",
-    "SG": "鏂板姞鍧?(Singapore)", "US": "缇庡浗 (United States)", "KR": "闊╁浗 (South Korea)",
-    "DE": "寰峰浗 (Germany)", "GB": "鑻卞浗 (United Kingdom)", "CA": "鍔犳嬁澶?(Canada)",
-    "FR": "娉曞浗 (France)", "NL": "鑽峰叞 (Netherlands)", "RU": "淇勭綏鏂?(Russia)",
-    "IN": "鍗板害 (India)", "AU": "婢冲ぇ鍒╀簹 (Australia)", "IT": "鎰忓ぇ鍒?(Italy)",
-    "ES": "瑗跨彮鐗?(Spain)", "TR": "鍦熻€冲叾 (Turkey)", "AE": "闃胯仈閰?(UAE)",
-    "BR": "宸磋タ (Brazil)", "MY": "椹潵瑗夸簹 (Malaysia)", "TH": "娉板浗 (Thailand)",
-    "VN": "瓒婂崡 (Vietnam)", "PH": "鑿插緥瀹?(Philippines)", "ID": "鍗板凹 (Indonesia)",
-    "MX": "澧ㄨタ鍝?(Mexico)", "AR": "闃挎牴寤?(Argentina)", "CL": "鏅哄埄 (Chile)",
-    "CO": "鍝ヤ鸡姣斾簹 (Colombia)", "PE": "绉橀瞾 (Peru)", "ZA": "鍗楅潪 (South Africa)",
-    "EG": "鍩冨強 (Egypt)", "KE": "鑲凹浜?(Kenya)", "NG": "灏兼棩鍒╀簹 (Nigeria)",
-    "UA": "涔屽厠鍏?(Ukraine)", "PL": "娉㈠叞 (Poland)", "SE": "鐟炲吀 (Sweden)",
-    "NO": "鎸▉ (Norway)", "FI": "鑺叞 (Finland)", "DK": "涓归害 (Denmark)",
-    "CH": "鐟炲＋ (Switzerland)", "AT": "濂ュ湴鍒?(Austria)", "BE": "姣斿埄鏃?(Belgium)",
-    "IE": "鐖卞皵鍏?(Ireland)", "PT": "钁¤悇鐗?(Portugal)", "GR": "甯岃厞 (Greece)",
-    "CZ": "鎹峰厠 (Czech)", "RO": "缃楅┈灏间簹 (Romania)", "HU": "鍖堢墮鍒?(Hungary)",
-    "IL": "浠ヨ壊鍒?(Israel)", "SA": "娌欑壒 (Saudi Arabia)", "QA": "鍗″灏?(Qatar)",
-    "KZ": "鍝堣惃鍏嬫柉鍧?(Kazakhstan)", "UZ": "涔屽吂鍒厠鏂潶 (Uzbekistan)",
-    "PK": "宸村熀鏂潶 (Pakistan)", "BD": "瀛熷姞鎷?(Bangladesh)", "LK": "鏂噷鍏板崱 (Sri Lanka)",
-    "NP": "灏兼硦灏?(Nepal)", "MM": "缂呯敻 (Myanmar)", "KH": "鏌煍瀵?(Cambodia)",
-    "LA": "鑰佹対 (Laos)", "NZ": "鏂拌タ鍏?(New Zealand)", "EE": "鐖辨矙灏间簹 (Estonia)",
-    "LV": "鎷夎劚缁翠簹 (Latvia)", "LT": "绔嬮櫠瀹?(Lithuania)", "BG": "淇濆姞鍒╀簹 (Bulgaria)",
-    "RS": "濉炲皵缁翠簹 (Serbia)", "HR": "鍏嬬綏鍦颁簹 (Croatia)", "SK": "鏂礇浼愬厠 (Slovakia)",
-    "SI": "鏂礇鏂囧凹浜?(Slovenia)", "IS": "鍐板矝 (Iceland)", "LU": "鍗㈡．鍫?(Luxembourg)",
-    "MT": "椹€充粬 (Malta)", "CY": "濉炴郸璺柉 (Cyprus)", "GE": "鏍奸瞾鍚変簹 (Georgia)",
-    "AM": "浜氱編灏间簹 (Armenia)", "AZ": "闃垮鎷滅枂 (Azerbaijan)", "MD": "鎽╁皵澶氱摝 (Moldova)",
-    "BY": "鐧戒縿缃楁柉 (Belarus)", "SC": "濉炶垖灏?(Seychelles)", "OTHER": "鍏朵粬鍦板尯 (Other)",
+    "HK": "中国香港 (Hong Kong)", "TW": "中国台湾 (Taiwan)", "JP": "日本 (Japan)",
+    "SG": "新加坡 (Singapore)", "US": "美国 (United States)", "KR": "韩国 (South Korea)",
+    "DE": "德国 (Germany)", "GB": "英国 (United Kingdom)", "CA": "加拿大 (Canada)",
+    "FR": "法国 (France)", "NL": "荷兰 (Netherlands)", "RU": "俄罗斯 (Russia)",
+    "IN": "印度 (India)", "AU": "澳大利亚 (Australia)", "IT": "意大利 (Italy)",
+    "ES": "西班牙 (Spain)", "TR": "土耳其 (Turkey)", "AE": "阿联酋 (UAE)",
+    "BR": "巴西 (Brazil)", "MY": "马来西亚 (Malaysia)", "TH": "泰国 (Thailand)",
+    "VN": "越南 (Vietnam)", "PH": "菲律宾 (Philippines)", "ID": "印尼 (Indonesia)",
+    "MX": "墨西哥 (Mexico)", "AR": "阿根廷 (Argentina)", "CL": "智利 (Chile)",
+    "CO": "哥伦比亚 (Colombia)", "PE": "秘鲁 (Peru)", "ZA": "南非 (South Africa)",
+    "EG": "埃及 (Egypt)", "KE": "肯尼亚 (Kenya)", "NG": "尼日利亚 (Nigeria)",
+    "UA": "乌克兰 (Ukraine)", "PL": "波兰 (Poland)", "SE": "瑞典 (Sweden)",
+    "NO": "挪威 (Norway)", "FI": "芬兰 (Finland)", "DK": "丹麦 (Denmark)",
+    "CH": "瑞士 (Switzerland)", "AT": "奥地利 (Austria)", "BE": "比利时 (Belgium)",
+    "IE": "爱尔兰 (Ireland)", "PT": "葡萄牙 (Portugal)", "GR": "希腊 (Greece)",
+    "CZ": "捷克 (Czech)", "RO": "罗马尼亚 (Romania)", "HU": "匈牙利 (Hungary)",
+    "IL": "以色列 (Israel)", "SA": "沙特 (Saudi Arabia)", "QA": "卡塔尔 (Qatar)",
+    "KZ": "哈萨克斯坦 (Kazakhstan)", "UZ": "乌兹别克斯坦 (Uzbekistan)",
+    "PK": "巴基斯坦 (Pakistan)", "BD": "孟加拉 (Bangladesh)", "LK": "斯里兰卡 (Sri Lanka)",
+    "NP": "尼泊尔 (Nepal)", "MM": "缅甸 (Myanmar)", "KH": "柬埔寨 (Cambodia)",
+    "LA": "老挝 (Laos)", "NZ": "新西兰 (New Zealand)", "EE": "爱沙尼亚 (Estonia)",
+    "LV": "拉脱维亚 (Latvia)", "LT": "立陶宛 (Lithuania)", "BG": "保加利亚 (Bulgaria)",
+    "RS": "塞尔维亚 (Serbia)", "HR": "克罗地亚 (Croatia)", "SK": "斯洛伐克 (Slovakia)",
+    "SI": "斯洛文尼亚 (Slovenia)", "IS": "冰岛 (Iceland)", "LU": "卢森堡 (Luxembourg)",
+    "MT": "马耳他 (Malta)", "CY": "塞浦路斯 (Cyprus)", "GE": "格鲁吉亚 (Georgia)",
+    "AM": "亚美尼亚 (Armenia)", "AZ": "阿塞拜疆 (Azerbaijan)", "MD": "摩尔多瓦 (Moldova)",
+    "BY": "白俄罗斯 (Belarus)", "SC": "塞舌尔 (Seychelles)", "OTHER": "其他地区 (Other)",
 }
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
-# 宸ュ叿鍑芥暟
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# ══════════════════════════════════════════════════════════════════
+# 工具函数
+# ══════════════════════════════════════════════════════════════════
 
 def get_country_flag(country_code: str) -> str:
     if not country_code:
-        return "馃寪"
+        return "🌐"
     cc = country_code.upper()
     if cc in ("OTHER", "ZZ", "XX", "T1", "A1", "A2"):
-        return "馃寪"
+        return "🌐"
     if len(cc) == 2 and cc.isalpha() and cc.isascii():
         return chr(ord(cc[0]) + 127397) + chr(ord(cc[1]) + 127397)
-    return "馃寪"
+    return "🌐"
 
 
 def b64_decode(data: str) -> str:
-    """瀹归敊 base64 瑙ｇ爜 (鏀寔 URL-safe / 缂哄け padding)"""
+    """容错 base64 解码 (支持 URL-safe / 缺失 padding)"""
     data = data.strip()
     try:
         pad = -len(data) % 4
@@ -376,28 +376,28 @@ def b64_decode(data: str) -> str:
         return ""
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
-# HTTP 浼氳瘽 (涓ゅ垎绂昏璁?:
+# ══════════════════════════════════════════════════════════════════
+# HTTP 会话 (两分离设计):
 #
-# 銆愯璁″畾浣? 娴嬫椿瑙嗚 = GitHub Actions 缇庡浗寰蒋浜?(娴峰鐩磋繛鑺傜偣)銆?
-#   鑺傜偣浠庢捣澶栧彲杈惧嵆鍏ュ簱; 澶ч檰鐢ㄦ埛缁忓墠缃唬鐞?閾惧紡)璁块棶 鈥斺€?涓?CI 鍚岃瑙掋€?
-#   鍥犳: 鏈湴寮€鍙戞満 (澶ч檰缃戠粶) 鍙敤浜庤皟璇? 鎶撹闃呮簮闇€鍊熺郴缁熶唬鐞嗚繃澧?
-#   鐢熶骇鐜 (Actions) 鏃犱唬鐞嗙洿杩? 澶╃劧姝ｇ‘銆?
+# 【设计定位: 测活视角 = GitHub Actions 美国微软云 (海外直连节点)】
+#   节点从海外可达即入库; 大陆用户经前置代理(链式)访问 —— 与 CI 同视角。
+#   因此: 本地开发机 (大陆网络) 只用于调试, 抓订阅源需借系统代理过墙;
+#   生产环境 (Actions) 无代理直连, 天然正确。
 #
-#   - DIRECT_SESSION (trust_env=True): 鎶撹闃呮簮/涓嬭浇鏁版嵁搴?IP鎯呮姤/Scamalytics銆?
-#       鏈湴: 缁忕郴缁熶唬鐞?(v2rayN) 杩囧; Actions: 鐩磋繛 鈥?涓ょ鐜閮芥纭€?
-#   - PROBE_SESSION (trust_env=False): 缁?sing-box SOCKS 鎺㈡祴鑺傜偣銆?
-#       寮哄埗闅旂鐜浠ｇ悊, 淇濊瘉娴嬬殑鏄?杩愯鏈衡啋鑺傜偣"鐪熷疄閾捐矾銆?
-#       (鏈湴璋冭瘯鏃跺彈 GFW 褰卞搷鐨勫け璐?鈮?鑺傜偣姝讳骸, Actions 涓婁細寰楀埌鐪熷疄缁撴灉;
-#        瀹佸彲鏈湴澶氭潃, 涓嶅彲 CI 璇潃 鈥?鐢熶骇鍒ゅ畾浠?Actions 涓哄噯)
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+#   - DIRECT_SESSION (trust_env=True): 抓订阅源/下载数据库/IP情报/Scamalytics。
+#       本地: 经系统代理 (v2rayN) 过墙; Actions: 直连 — 两种环境都正确。
+#   - PROBE_SESSION (trust_env=False): 经 sing-box SOCKS 探测节点。
+#       强制隔离环境代理, 保证测的是"运行机→节点"真实链路。
+#       (本地调试时受 GFW 影响的失败 ≠ 节点死亡, Actions 上会得到真实结果;
+#        宁可本地多杀, 不可 CI 误杀 — 生产判定以 Actions 为准)
+# ══════════════════════════════════════════════════════════════════
 
 DIRECT_SESSION = requests.Session()
-DIRECT_SESSION.trust_env = True    # 璺熼殢绯荤粺/鐜浠ｇ悊 (鏈湴澶ч檰缃戠粶鎶?GitHub 闇€瑕? Actions 鏃犱唬鐞嗙洿杩炰笉鍙楀奖鍝?
+DIRECT_SESSION.trust_env = True    # 跟随系统/环境代理 (本地大陆网络抓 GitHub 需要; Actions 无代理直连不受影响)
 DIRECT_SESSION.headers.update({"User-Agent": USER_AGENT, "Accept": "*/*"})
 
 PROBE_SESSION = requests.Session()
-PROBE_SESSION.trust_env = False    # 寮哄埗闅旂: 鑺傜偣鎺㈡祴閾捐矾缁濅笉缁忔湰鏈轰唬鐞? 闃叉薄鏌撴祴璇曠粨鏋?
+PROBE_SESSION.trust_env = False    # 强制隔离: 节点探测链路绝不经本机代理, 防污染测试结果
 PROBE_SESSION.headers.update({"User-Agent": USER_AGENT})
 
 
@@ -424,7 +424,7 @@ def is_ip_literal(host: str) -> bool:
 
 
 def parse_host_port(hostinfo: str):
-    """瑙ｆ瀽 '[v6]:port' 鎴?'v4:port' 鎴?'host:port'"""
+    """解析 '[v6]:port' 或 'v4:port' 或 'host:port'"""
     hostinfo = hostinfo.strip()
     if hostinfo.startswith("["):
         m = re.match(r"^\[([^\]]+)\](?::(\d+))?$", hostinfo)
@@ -436,29 +436,29 @@ def parse_host_port(hostinfo: str):
         if host and port.isdigit():
             return host, int(port)
     if hostinfo.count(":") > 1 and is_ip_literal(hostinfo):
-        return hostinfo, 0  # 瑁?IPv6 鏃犵鍙?
+        return hostinfo, 0  # 裸 IPv6 无端口
     parts = hostinfo.rsplit(":", 1)
     if len(parts) == 2 and parts[1].isdigit():
         return parts[0], int(parts[1])
     return hostinfo, 0
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
-# 鐜鍑嗗 (sing-box / GeoLite)
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# ══════════════════════════════════════════════════════════════════
+# 环境准备 (sing-box / GeoLite)
+# ══════════════════════════════════════════════════════════════════
 
 def download_file(url: str, dest: str, timeout: int = 300, retries: int = 3):
-    """涓嬭浇鏂囦欢鍒版湰鍦? 鍒嗗潡娴佸紡 + 鍘熷瓙鏇挎崲 + 閲嶈瘯 + 闀滃儚鍒囨崲
-    (GitHub 鐩磋繛澶辫触鑷姩灏濊瘯 jsdelivr 闀滃儚 鈥?鏈湴澶ч檰缃戠粶/CI 鍋跺彂闄愭祦閮芥洿绋?"""
+    """下载文件到本地; 分块流式 + 原子替换 + 重试 + 镜像切换
+    (GitHub 直连失败自动尝试 jsdelivr 镜像 — 本地大陆网络/CI 偶发限流都更稳)"""
     if os.path.exists(dest) and os.path.getsize(dest) > 1024:
         return
-    # 闀滃儚: github.com/OWNER/REPO/... 鈫?cdn.jsdelivr.net/gh/OWNER/REPO@...
+    # 镜像: github.com/OWNER/REPO/... → cdn.jsdelivr.net/gh/OWNER/REPO@...
     mirrors = [url]
     m = re.match(r"^https://(?:github\.com|raw\.githubusercontent\.com)/([^/]+)/([^/]+)/(?:raw|releases/download)/(.+)$", url)
     if m and "releases/download" not in url:
         owner, repo, path = m.groups()
         mirrors.append(f"https://cdn.jsdelivr.net/gh/{owner}/{repo.replace('.git','')}@{path}")
-    print(f"[*] 涓嬭浇: {url}")
+    print(f"[*] 下载: {url}")
     tmp = dest + ".part"
     last_err = None
     for mirror in mirrors:
@@ -472,28 +472,28 @@ def download_file(url: str, dest: str, timeout: int = 300, retries: int = 3):
                             if chunk:
                                 f.write(chunk)
                 if os.path.getsize(tmp) < 1024:
-                    raise RuntimeError(f"涓嬭浇涓嶅畬鏁? {os.path.getsize(tmp)} bytes")
+                    raise RuntimeError(f"下载不完整: {os.path.getsize(tmp)} bytes")
                 os.replace(tmp, dest)
                 return
             except Exception as e:
                 last_err = e
                 if attempt < retries - 1:
                     wait = 3 * (attempt + 1)
-                    print(f"[!] 涓嬭浇澶辫触 (绗瑊attempt+1}娆?: {str(e)[:70]} 鈥?{wait}s 鍚庨噸璇?)
+                    print(f"[!] 下载失败 (第{attempt+1}次): {str(e)[:70]} — {wait}s 后重试")
                     time.sleep(wait)
         if len(mirrors) > 1 and mirror != mirrors[-1]:
-            print(f"[!] 鍒囨崲闀滃儚: {mirrors[1]}")
-    # 娓呯悊澶辫触鐨勫崐鎴枃浠?
+            print(f"[!] 切换镜像: {mirrors[1]}")
+    # 清理失败的半截文件
     try:
         if os.path.exists(tmp):
             os.remove(tmp)
     except OSError:
         pass
-    raise RuntimeError(f"涓嬭浇鏈€缁堝け璐?({mirrors[0]}): {last_err}")
+    raise RuntimeError(f"下载最终失败 ({mirrors[0]}): {last_err}")
 
 
 def setup_environment():
-    print("[*] 鍑嗗 sing-box 鍐呮牳涓?GeoLite2 绂荤嚎鏁版嵁搴?...")
+    print("[*] 准备 sing-box 内核与 GeoLite2 离线数据库 ...")
     os.makedirs(RUNTIME_DIR, exist_ok=True)
 
     # --- sing-box ---
@@ -523,33 +523,33 @@ def setup_environment():
             os.remove(archive)
         except OSError:
             pass
-    # 鏍￠獙鍐呮牳鍙繍琛?
+    # 校验内核可运行
     try:
         ver = subprocess.run([exe, "version"], capture_output=True, text=True, timeout=20)
         first = (ver.stdout or "").splitlines()[0] if ver.stdout else "?"
-        print(f"[+] sing-box 鍐呮牳灏辩华: {first.strip()}")
+        print(f"[+] sing-box 内核就绪: {first.strip()}")
     except Exception as e:
-        print(f"[!] sing-box 鍐呮牳鏃犳硶杩愯: {e}")
+        print(f"[!] sing-box 内核无法运行: {e}")
         raise
 
-    # --- GeoLite2 鏁版嵁搴?---
+    # --- GeoLite2 数据库 ---
     country_db = os.path.join(RUNTIME_DIR, "Country.mmdb")
     asn_db = os.path.join(RUNTIME_DIR, "ASN.mmdb")
     download_file("https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb", country_db)
     download_file("https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb", asn_db)
-    print(f"[+] GeoLite 鏁版嵁搴撳氨缁? Country={os.path.getsize(country_db)//1024}KB, ASN={os.path.getsize(asn_db)//1024}KB")
+    print(f"[+] GeoLite 数据库就绪: Country={os.path.getsize(country_db)//1024}KB, ASN={os.path.getsize(asn_db)//1024}KB")
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 鑺傜偣 URI 瑙ｆ瀽 (鍏ㄥ崗璁?鈫?sing-box outbound JSON)
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 节点 URI 解析 (全协议 → sing-box outbound JSON)
+# ═══════════════════════════════════════════N═══════════════════════
 
 def _query_dict(query: str) -> dict:
     return {k: v[0] for k, v in urllib.parse.parse_qs(query, keep_blank_values=True).items()}
 
 
 def _parse_tls_params(params: dict, host: str) -> dict:
-    """浠?URI query 鎻愬彇 TLS/Reality 璁剧疆 鈫?sing-box 鏍煎紡"""
+    """从 URI query 提取 TLS/Reality 设置 → sing-box 格式"""
     security = params.get("security", "").lower()
     tls = {}
     if security == "reality":
@@ -577,7 +577,7 @@ def _parse_tls_params(params: dict, host: str) -> dict:
 
 
 def _parse_transport(params: dict) -> dict:
-    """浠?URI query 鎻愬彇浼犺緭灞?鈫?sing-box transport 鏍煎紡"""
+    """从 URI query 提取传输层 → sing-box transport 格式"""
     network = params.get("type", "tcp").lower()
     if network in ("tcp", "none", "raw"):
         return None
@@ -587,7 +587,7 @@ def _parse_transport(params: dict) -> dict:
             t["path"] = urllib.parse.unquote(params["path"])
         if params.get("host"):
             t["headers"] = {"Host": params["host"]}
-        # 0-RTT early data (v2ray ws 0-RTT: path 鍚??ed=2560 鏃剁敱 max-early-data 鎸囧畾)
+        # 0-RTT early data (v2ray ws 0-RTT: path 含 ?ed=2560 时由 max-early-data 指定)
         if params.get("ed"):
             t["max_early_data"] = 2560
             t["early_data_header_name"] = "Sec-WebSocket-Protocol"
@@ -597,7 +597,7 @@ def _parse_transport(params: dict) -> dict:
         if params.get("serviceName"):
             t["service_name"] = urllib.parse.unquote(params["serviceName"])
         return t
-    if network in ("h2", "http"):   # v2ray 鐢熸€佷袱绉嶅啓娉曢兘鏈? type=h2 / type=http (瀵煎嚭鐢?http, 鍏煎涓よ€?
+    if network in ("h2", "http"):   # v2ray 生态两种写法都有: type=h2 / type=http (导出用 http, 兼容两者)
         t = {"type": "http"}
         host = params.get("host", "")
         if host:
@@ -624,7 +624,7 @@ def parse_vless(uri: str):
     params = _query_dict(query or "")
     tls = _parse_tls_params(params, host)
     if params.get("security", "").lower() == "reality" and tls is None:
-        return None  # reality 缂?pbk 鏃犳硶娴?
+        return None  # reality 缺 pbk 无法测
     outbound = {
         "type": "vless",
         "tag": "node",
@@ -728,7 +728,7 @@ def parse_trojan(uri: str):
 
 
 def parse_ss(uri: str):
-    """ss://base64(method:password)@host:port#name  鎴? ss://method:password@... (SIP002)"""
+    """ss://base64(method:password)@host:port#name  或  ss://method:password@... (SIP002)"""
     body = uri[5:].split("#", 1)[0]
     name = urllib.parse.unquote(uri.split("#", 1)[1]) if "#" in uri else ""
     # SIP002: method:password@host:port
@@ -771,10 +771,10 @@ def _ss_outbound(host, port, method, password):
 
 def parse_hysteria2(uri: str):
     """hy2:// / hysteria2:// auth@host:port?sni=..&obfs=salamander&obfs-password=..&insecure=1
-    娉? auth 鍙兘鍚?: / 绛夌壒娈婂瓧绗?(濡?https:// 鍓嶇紑鐨勫瘑鐮? 鈥?浠ユ渶鍚庝竴涓?@ 涓洪敋鐐瑰垎鍓?""
+    注: auth 可能含 : / 等特殊字符 (如 https:// 前缀的密码) — 以最后一个 @ 为锚点分割"""
     prefix = "hysteria2://" if uri.startswith("hysteria2://") else "hy2://"
     body = uri[len(prefix):].split("#", 1)[0]
-    # 浠ユ渶鍚庝竴涓?@ 鍒嗗壊 (瀵嗙爜鍐呭彲鑳藉惈 @); host 閮ㄥ垎涓嶅惈 @
+    # 以最后一个 @ 分割 (密码内可能含 @); host 部分不含 @
     at = body.rfind("@")
     if at <= 0:
         return None
@@ -802,8 +802,8 @@ def parse_hysteria2(uri: str):
         outbound["obfs"] = {"type": params["obfs"], "password": params.get("obfs-password", "")}
     mport = params.get("mport") or params.get("ports")
     if mport:
-        # 瀹炴祴楠岃瘉: server_ports 鍙帴鍙?"start:end" 鍖洪棿; 瑁稿崟绔彛 "443" 浼?FATAL
-        # 鍗曠鍙ｄ繚鐣欏湪 server_port, 鍖洪棿鏀?server_ports (涓よ€呭彲鍏卞瓨, 瀹炴祴 check 閫氳繃)
+        # 实测验证: server_ports 只接受 "start:end" 区间; 裸单端口 "443" 会 FATAL
+        # 单端口保留在 server_port, 区间放 server_ports (两者可共存, 实测 check 通过)
         singles, ranges = [], []
         for part in str(mport).split(","):
             part = part.strip()
@@ -819,14 +819,14 @@ def parse_hysteria2(uri: str):
             elif part.isdigit():
                 singles.append(part)
         if ranges or singles:
-            # 鍏ㄩ儴杞负 "start:end" 鍖洪棿鏍煎紡 (瀹炴祴: 瑁稿崟绔彛 FATAL)
+            # 全部转为 "start:end" 区间格式 (实测: 裸单端口 FATAL)
             outbound["server_ports"] = ranges + [f"{s}:{s}" for s in singles]
-            outbound.pop("server_port", None)  # 绔彛璺宠穬鑺傜偣鏃犲浐瀹氬崟绔彛
+            outbound.pop("server_port", None)  # 端口跳跃节点无固定单端口
     return outbound
 
 
 def _parse_port_range(spec: str):
-    """'2087-2097,443' 鈫?sing-box server_ports 鏍煎紡 ['2087:2097', '443:443'] (瀹炴祴: 瑁稿崟绔彛 FATAL, 蹇呴』鍖洪棿)"""
+    """'2087-2097,443' → sing-box server_ports 格式 ['2087:2097', '443:443'] (实测: 裸单端口 FATAL, 必须区间)"""
     result = []
     for part in str(spec).split(","):
         part = part.strip()
@@ -895,7 +895,7 @@ def parse_anytls(uri: str):
 
 
 def parse_ssh(uri: str):
-    """ssh://user:pass@host:port#name (灏戣浜庡厤璐规睜, 椤烘墜鏀寔)"""
+    """ssh://user:pass@host:port#name (少见于免费池, 顺手支持)"""
     m = re.match(r"^ssh://([^@#/?]+)@(\[[^\]]+\]|[^:@/?]+):(\d+)?", uri.split("#")[0])
     if not m:
         return None
@@ -925,12 +925,12 @@ PARSERS = {
     "ssh://": parse_ssh,
 }
 
-# 鎺掗櫎鏄庢樉鍔犲瘑娈嬬己/鍗犱綅鑺傜偣
-BLACKLIST_NAME_HINTS = re.compile(r"(鍓╀綑娴侀噺|娴侀噺閲嶇疆|expire|expired|瀹樼綉|濂楅|telegram\.me|t\.me/|鑾峰彇璁㈤槄)", re.I)
+# 排除明显加密残缺/占位节点
+BLACKLIST_NAME_HINTS = re.compile(r"(剩余流量|流量重置|expire|expired|官网|套餐|telegram\.me|t\.me/|获取订阅)", re.I)
 
 
 def parse_node_uri(uri: str):
-    """瑙ｆ瀽鑺傜偣 URI 鈫?(outbound, server, port, protocol) ; 澶辫触杩斿洖 None"""
+    """解析节点 URI → (outbound, server, port, protocol) ; 失败返回 None"""
     for prefix, parser in PARSERS.items():
         if uri.startswith(prefix):
             try:
@@ -941,7 +941,7 @@ def parse_node_uri(uri: str):
                 return None
             proto = out["type"]
             port = out.get("server_port")
-            if port is None:  # 绔彛璺宠穬鑺傜偣: 鏃犲浐瀹氱鍙? 鍙栧尯闂撮涓捣鐐圭敤浜庨妫€
+            if port is None:  # 端口跳跃节点: 无固定端口, 取区间首个起点用于预检
                 ports = out.get("server_ports") or []
                 first = ports[0].split(":")[0] if ports else "0"
                 port = int(first)
@@ -956,7 +956,7 @@ def extract_nodes_from_text(text: str) -> set:
     if not text:
         return results
     probe = text.strip()
-    # 鏈€澶氫笁灞?base64 瑙ｅ寘 (璁㈤槄甯歌鏁翠綋 base64)
+    # 最多三层 base64 解包 (订阅常见整体 base64)
     for _ in range(3):
         if any(p in probe for p in ("vmess://", "vless://", "ss://", "trojan://",
                                      "hy2://", "hysteria2://", "tuic://", "anytls://")):
@@ -965,7 +965,7 @@ def extract_nodes_from_text(text: str) -> set:
         if not decoded or decoded == probe:
             break
         probe = decoded
-    # 鐩存帴鏂囨湰涔熷彲鑳芥贩鏉?base64 琛?
+    # 直接文本也可能混杂 base64 行
     lines_blob = probe
     pattern = (r'((?:vmess|vless|trojan|ss|hy2|hysteria2|tuic|anytls|ssh)://'
                r'[^\s"\'<>\\]+)')
@@ -978,11 +978,11 @@ def extract_nodes_from_text(text: str) -> set:
 
 def fetch_raw_nodes() -> list:
     nodes = set()
-    print("[*] 鎶撳彇鍏ㄩ儴璁㈤槄婧?...")
+    print("[*] 抓取全部订阅源 ...")
 
     def _fetch(url):
         last_err = None
-        # 閲嶈瘯 2 娆?(缃戠粶鎶栧姩/GFW 闂存瓏鎬ч噸缃? 閫€閬?3s)
+        # 重试 2 次 (网络抖动/GFW 间歇性重置; 退避 3s)
         for attempt in range(3):
             try:
                 r = http_get(url, timeout=30)
@@ -1001,28 +1001,28 @@ def fetch_raw_nodes() -> list:
         for f in as_completed(futs):
             url, got, err = f.result()
             if err:
-                print(f"[!] 鎷夊彇澶辫触 {url} 鈫?{err}")
+                print(f"[!] 拉取失败 {url} → {err}")
             else:
-                print(f"[+] {url} 鈫?{len(got)} 鑺傜偣")
+                print(f"[+] {url} → {len(got)} 节点")
             nodes.update(got)
-    print(f"[*] 鍒濆鎶撳彇鎬婚噺: {len(nodes)}")
+    print(f"[*] 初始抓取总量: {len(nodes)}")
     return list(nodes)
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 闃舵 A: 绔彛棰勬 (鍓婂噺姝昏妭鐐? 閬垮厤鍚庨潰娴垂 sing-box 鍏ㄦ祦绋?
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 阶段 A: 端口预检 (削减死节点, 避免后面浪费 sing-box 全流程)
+# ═══════════════════════════════════════════N═══════════════════════
 
-# DoH 鍩熷悕瑙ｆ瀽 (Cloudflare): 闃?DNS 姹℃煋 (鏈湴澶ч檰缃戠粶); Actions 涓婇『甯﹁烦杩囧叾鍥藉唴 DNS 闄愬埗
+# DoH 域名解析 (Cloudflare): 防 DNS 污染 (本地大陆网络); Actions 上顺带跳过其国内 DNS 限制
 _DNS_CACHE = {}
 
 def resolve_host(host: str) -> str:
-    """DoH 瑙ｆ瀽 (甯︽湰鍦扮紦瀛?; 澶辫触閫€鍥炵郴缁?DNS"""
+    """DoH 解析 (带本地缓存); 失败退回系统 DNS"""
     if not host or is_ip_literal(host):
         return host or ""
     if host in _DNS_CACHE:
         return _DNS_CACHE[host]
-    # 1) DoH (Cloudflare 1.1.1.1, 璧?DIRECT_SESSION 鍙繃澧?
+    # 1) DoH (Cloudflare 1.1.1.1, 走 DIRECT_SESSION 可过墙)
     try:
         r = DIRECT_SESSION.get(
             f"https://cloudflare-dns.com/dns-query?name={urllib.parse.quote(host)}&type=A",
@@ -1035,7 +1035,7 @@ def resolve_host(host: str) -> str:
                     return a["data"]
     except Exception:
         pass
-    # 2) 绯荤粺 DNS 鍏滃簳
+    # 2) 系统 DNS 兜底
     try:
         return socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
     except Exception:
@@ -1043,11 +1043,11 @@ def resolve_host(host: str) -> str:
 
 
 def knock_port(server: str, port: int, protocol_type: str) -> bool:
-    """TCP 鐩磋繛棰勬 (DoH 瑙ｆ瀽闃叉湰鍦?DNS 姹℃煋); QUIC 绫荤洿鎺ユ斁琛岄樁娈礏
-    娉? 棰勬澶辫触涓嶆窐姹?(鏈湴澶ч檰瑙嗚鐨勫亣姝?鈮?鑺傜偣姝讳骸), 鍙奖鍝嶆帓搴?
-        鐢熸鐢遍樁娈礏 sing-box 鍏ㄦ祦绋嬫祴娲昏鍐?(Actions 娴峰瑙嗚)"""
+    """TCP 直连预检 (DoH 解析防本地 DNS 污染); QUIC 类直接放行阶段B
+    注: 预检失败不淘汰 (本地大陆视角的假死 ≠ 节点死亡), 只影响排序;
+        生死由阶段B sing-box 全流程测活裁决 (Actions 海外视角)"""
     if protocol_type in ("hysteria2", "tuic"):
-        # QUIC 鏃犳硶杞婚噺棰勬 UDP 绔彛杩為€氭€? 涓旀湰鍦?UDP 甯歌 QoS 鈫?鏀捐浜ら樁娈礏
+        # QUIC 无法轻量预检 UDP 端口连通性, 且本地 UDP 常被 QoS → 放行交阶段B
         return True
     try:
         ip = resolve_host(server)
@@ -1060,9 +1060,9 @@ def knock_port(server: str, port: int, protocol_type: str) -> bool:
 
 
 def prefilter_candidates(candidates: list) -> list:
-    """绔彛棰勬: 閫氳繃鑰呬紭鍏? 鏈€氳繃鑰呴檷绾т繚鐣?(闃叉鏈湴缃戠粶/GFW 瑙嗚璇潃;
-    鐪熸鐢熸鐢遍樁娈礏 sing-box 鍏ㄦ祦绋嬫祴娲昏鍐?鈥?Actions 娴峰瑙嗚)"""
-    print(f"[*] 绔彛棰勬 (TCP {PORT_KNOCK_TIMEOUT}s): {len(candidates)} 鍊欓€?...")
+    """端口预检: 通过者优先, 未通过者降级保留 (防止本地网络/GFW 视角误杀;
+    真正生死由阶段B sing-box 全流程测活裁决 — Actions 海外视角)"""
+    print(f"[*] 端口预检 (TCP {PORT_KNOCK_TIMEOUT}s): {len(candidates)} 候选 ...")
     passed, deferred = [], []
 
     def _knock(item):
@@ -1070,17 +1070,17 @@ def prefilter_candidates(candidates: list) -> list:
         return knock_port(server, port, proto)
 
     with ThreadPoolExecutor(max_workers=64) as ex:
-        # ex.map 淇濆簭杩斿洖; 閫氳繃鑰呬紭鍏? 鏈€氳繃闄嶇骇淇濈暀 (涓嶆窐姹? 闃叉湰鍦拌瑙掕鏉€)
+        # ex.map 保序返回; 通过者优先, 未通过降级保留 (不淘汰, 防本地视角误杀)
         for item, ok in zip(candidates, ex.map(_knock, candidates)):
             (passed if ok else deferred).append(item)
-    print(f"[+] 棰勬閫氳繃: {len(passed)} | 棰勬鏈繃(淇濈暀浣庝紭鍏堢骇寰呭叏娴?: {len(deferred)}")
-    # 棰勬鏈繃鐨勪粛杩涘叆鍏ㄦ祦绋?(鍙槸鎺掑湪鍚庨潰) 鈥?浜ょ粰 sing-box 鐪熷疄瑁佸喅
+    print(f"[+] 预检通过: {len(passed)} | 预检未过(保留低优先级待全测): {len(deferred)}")
+    # 预检未过的仍进入全流程 (只是排在后面) — 交给 sing-box 真实裁决
     return passed + deferred
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 闃舵 B: sing-box 鐪熷疄娴嬫椿
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 阶段 B: sing-box 真实测活
+# ═══════════════════════════════════════════N═══════════════════════
 
 def _alloc_socks_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -1094,26 +1094,26 @@ def build_test_config(outbound: dict, socks_port: int, chain_relay: dict = None)
 
     outbounds = [node, {"type": "direct", "tag": "direct"}, {"type": "block", "tag": "block"}]
 
-    # 鈺愨晲 閾惧紡鍓嶇疆 (瀹跺閾惧紡澶嶆祴鐢? 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-    # chain_relay: 宸查獙璇佸瓨娲荤殑 sing-box outbound dict 鈥?node 缁忓畠杞彂 (detour 鍙岃烦)
-    # 妯℃嫙鐢ㄦ埛 v2rayN "閾惧紡/鍓嶇疆浠ｇ悊" 鍦烘櫙: 鍓嶇疆 鈫?瀹跺鑺傜偣 鈫?鐩爣
+    # ══ 链式前置 (家宽链式复测用) ═════════════════════════════════════
+    # chain_relay: 已验证存活的 sing-box outbound dict — node 经它转发 (detour 双跳)
+    # 模拟用户 v2rayN "链式/前置代理" 场景: 前置 → 家宽节点 → 目标
     if chain_relay:
         relay = dict(chain_relay)
         relay["tag"] = "chain-relay"
-        # relay 鑷韩鍓?detour (閬垮厤涓?node 鐨?detour 寰幆)
+        # relay 自身剥 detour (避免与 node 的 detour 循环)
         relay.pop("detour", None)
         outbounds.append(relay)
         node["detour"] = "chain-relay"
 
-    # 鈺愨晲 鍓嶇疆浠ｇ悊 (閾惧紡) 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-    # 妯℃嫙 GitHub Actions 娴峰瑙嗚:
-    #   - 鏈湴澶ч檰寮€鍙戞満: 缁忓墠缃唬鐞?榛樿 v2rayN 127.0.0.1:10808)鍑烘捣 鈫?绛夋晥 CI 瑙嗚
-    #     (澶ч檰鐩磋繛鐩爣鑺傜偣浼氳 GFW 鎷︽埅, 閫犳垚鏈湴鍋囨 鈮?鑺傜偣姝讳骸)
-    #   - GitHub Actions: FRONT_PROXY 涓虹┖ 鈫?鐩磋繛 (Azure US 鏈氨鏄捣澶栬瑙?
-    # 鐢ㄦ硶: 鐜鍙橀噺 FRONT_PROXY=socks5://127.0.0.1:10808
+    # ══ 前置代理 (链式) ═════════════════════════════════════════════
+    # 模拟 GitHub Actions 海外视角:
+    #   - 本地大陆开发机: 经前置代理(默认 v2rayN 127.0.0.1:10808)出海 → 等效 CI 视角
+    #     (大陆直连目标节点会被 GFW 拦截, 造成本地假死 ≠ 节点死亡)
+    #   - GitHub Actions: FRONT_PROXY 为空 → 直连 (Azure US 本就是海外视角)
+    # 用法: 环境变量 FRONT_PROXY=socks5://127.0.0.1:10808
     front = os.environ.get("FRONT_PROXY", "").strip()
     if front and not chain_relay:
-        # 瑙ｆ瀽 socks5://host:port 鈫?socks outbound
+        # 解析 socks5://host:port → socks outbound
         m = re.match(r"^(socks5h?|http)://([^:]+):(\d+)$", front)
         if m:
             scheme, fhost, fport = m.groups()
@@ -1125,12 +1125,12 @@ def build_test_config(outbound: dict, socks_port: int, chain_relay: dict = None)
             if ftype == "socks":
                 front_out["version"] = "5"
             outbounds.append(front_out)
-            # 鑺傜偣鍑虹珯娴侀噺缁忓墠缃唬鐞?(detour 閾惧紡)
+            # 节点出站流量经前置代理 (detour 链式)
             node["detour"] = "front-proxy"
-            print_once("_FRONT_ENABLED", f"[*] 鍓嶇疆浠ｇ悊宸插惎鐢? {front} (妯℃嫙 CI 娴峰瑙嗚)")
+            print_once("_FRONT_ENABLED", f"[*] 前置代理已启用: {front} (模拟 CI 海外视角)")
 
     config = {
-        "log": {"level": "warn"},   # 瀹炴祴: silent 涓嶆槸鍚堟硶绾у埆 (trace/debug/info/warn/error/fatal/panic)
+        "log": {"level": "warn"},   # 实测: silent 不是合法级别 (trace/debug/info/warn/error/fatal/panic)
         "inbounds": [{
             "type": "socks",
             "tag": "socks-in",
@@ -1154,13 +1154,13 @@ def print_once(key: str, msg: str):
 
 
 def test_single_node(item, keep_alive_check=True):
-    """杩斿洖 dict 鎴?None; 鍚? 娲绘€?寤惰繜/鍑哄彛IP/鍥藉/ASN/ISP/閫熷害/MITM"""
+    """返回 dict 或 None; 含: 活性/延迟/出口IP/国家/ASN/ISP/速度/MITM"""
     raw, outbound, server, port, proto = item
     socks_port = _alloc_socks_port()
     task_id = uuid.uuid4().hex[:10]
     cfg_path = os.path.join(RUNTIME_DIR, f"sb_{task_id}.json")
 
-    # 鈽?閾惧紡鍓嶇疆 (chain relay): 娉ㄥ叆宸查獙璇佸瓨娲昏妭鐐逛綔鍓嶇疆 (chain_retest 鐢? 妯℃嫙 v2rayN 閾惧紡)
+    # ★ 链式前置 (chain relay): 注入已验证存活节点作前置 (chain_retest 用, 模拟 v2rayN 链式)
     chain_out = None
     chain_json = os.environ.get("CHAIN_RELAY_OUT", "").strip()
     if chain_json:
@@ -1174,15 +1174,15 @@ def test_single_node(item, keep_alive_check=True):
 
     exe = SINGBOX_BIN + (".exe" if os.name == "nt" else "")
 
-    # --- 0) sing-box check 棰勬牎楠? 蹇€熸窐姹?schema 閿欒 (瀹炴祴鍙彂鐜?2022 瀵嗛挜闀垮害/绔彛鍖洪棿绛夐敊璇? ---
+    # --- 0) sing-box check 预校验: 快速淘汰 schema 错误 (实测可发现 2022 密钥长度/端口区间等错误) ---
     try:
         chk = subprocess.run([exe, "check", "-c", cfg_path],
                              capture_output=True, text=True, timeout=15,
                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         if chk.returncode != 0:
-            return None  # 閰嶇疆绾ч敊璇?鈫?璇ヨ妭鐐规棤娉曡 sing-box 浣跨敤, 蹇呮窐姹?
+            return None  # 配置级错误 → 该节点无法被 sing-box 使用, 必淘汰
     except Exception:
-        pass  # check 鏈韩澶辫触涓嶉樆姝㈠悗缁?run 灏濊瘯
+        pass  # check 本身失败不阻止后续 run 尝试
 
     proc = None
     result = None
@@ -1192,12 +1192,12 @@ def test_single_node(item, keep_alive_check=True):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
         )
-        # 绛?SOCKS 绔彛灏辩华 (涓诲姩鎺㈡祴鑰岄潪鐩?sleep 鈥?淇鏃х増璇潃)
+        # 等 SOCKS 端口就绪 (主动探测而非盲 sleep — 修复旧版误杀)
         deadline = time.time() + 6
         ready = False
         while time.time() < deadline:
             if proc.poll() is not None:
-                break  # 杩涚▼宕╂簝 (閰嶇疆閿欒/绔彛鍐茬獊)
+                break  # 进程崩溃 (配置错误/端口冲突)
             try:
                 with socket.create_connection(("127.0.0.1", socks_port), timeout=0.4):
                     ready = True
@@ -1210,7 +1210,7 @@ def test_single_node(item, keep_alive_check=True):
         proxies = {"http": f"socks5h://127.0.0.1:{socks_port}",
                    "https": f"socks5h://127.0.0.1:{socks_port}"}
 
-        # --- 1) 娲绘€ф帰娴? 鍒嗗眰瓒呮椂閲嶈瘯 (棣栧嚮瀹?12s 瀹规參鑺傜偣淇濆噯纭巼; 閲嶈瘯绐?4s 蹇€熸斁寮冩鑺傜偣) ---
+        # --- 1) 活性探测: 分层超时重试 (首击宽 12s 容慢节点保准确率; 重试窄 4s 快速放弃死节点) ---
         alive_hits, latency_ms = 0, 99999
         t0 = time.time()
         for i, url in enumerate(LIVENESS_URLS):
@@ -1220,13 +1220,13 @@ def test_single_node(item, keep_alive_check=True):
                 if r.status_code in (204, 200):
                     alive_hits += 1
                     latency_ms = min(latency_ms, (time.time() - t0) * 1000)
-                    break  # 浠讳竴鎴愬姛鍗冲彲
+                    break  # 任一成功即可
             except Exception:
                 continue
         if alive_hits == 0:
             return None
 
-        # --- 2) 鐪熷疄鍑哄彛 IP (澶氳矾鍐椾綑) ---
+        # --- 2) 真实出口 IP (多路冗余) ---
         exit_ip, exit_country, exit_asn, exit_asn_org, exit_isp = None, None, None, None, None
         for url in IP_ECHO_URLS:
             try:
@@ -1260,8 +1260,8 @@ def test_single_node(item, keep_alive_check=True):
             except Exception:
                 continue
 
-        # --- 3) MITM 鍔寔妫€娴?(杞婚噺: 澶嶇敤娲绘€ч鍑荤殑 gstatic 璇锋眰宸查獙璇佽瘉涔﹂摼) ---
-        # 3a) 鐙珛澶嶆涓€娆″甫 verify=True 鐨勮姹? SSLError = TLS 鎷︽埅
+        # --- 3) MITM 劫持检测 (轻量: 复用活性首击的 gstatic 请求已验证证书链) ---
+        # 3a) 独立复检一次带 verify=True 的请求: SSLError = TLS 拦截
         mitm_risk = False
         try:
             r = PROBE_SESSION.get("https://www.gstatic.com/generate_204", proxies=proxies,
@@ -1271,12 +1271,12 @@ def test_single_node(item, keep_alive_check=True):
             else:
                 mitm_risk = r.status_code in (301, 302, 403, 407, 502, 503) or len(r.content) > 0
         except requests.exceptions.SSLError:
-            # 璇佷功閾鹃獙璇佸け璐?= TLS 鎷︽埅 (MITM) 鎴栧姡璐ㄨ嚜绛惧姭鎸?
+            # 证书链验证失败 = TLS 拦截 (MITM) 或劣质自签劫持
             mitm_risk = True
         except Exception:
-            pass  # 缃戠粶灞傚け璐ヤ笉绠?MITM (娲绘€ф帰娴嬪凡閫氳繃)
+            pass  # 网络层失败不算 MITM (活性探测已通过)
 
-        # 3b) cloudflare trace: warp=on = 濂楀３ WARP 鑺傜偣 (闈炵湡瀹炲嚭鍙? 闄嶆潈鏍囪) 鈥?4s 绐勮秴鏃?
+        # 3b) cloudflare trace: warp=on = 套壳 WARP 节点 (非真实出口, 降权标记) — 4s 窄超时
         is_warp = False
         try:
             r = PROBE_SESSION.get(TRACE_URL, proxies=proxies, timeout=PROBE_RETRY_TIMEOUT, verify=True)
@@ -1286,8 +1286,8 @@ def test_single_node(item, keep_alive_check=True):
         except Exception:
             pass
 
-        # --- 4) 鏂祦妫€娴? 闄愭椂涓嬭浇娴嬮€?(chunked 璇?+ 绌洪棽璁℃椂; 澶氱鐐瑰厹搴曢槻娴嬮€熺珯琚睆钄? ---
-        # 鏂祦绛惧悕: 杩炴帴寤虹珛涓旈鍖呮甯? 浣嗕腑閫斿仠姝㈤€佹暟鎹?鈫?绌洪棽瓒呮椂寮烘柇
+        # --- 4) 断流检测: 限时下载测速 (chunked 读 + 空闲计时; 多端点兜底防测速站被屏蔽) ---
+        # 断流签名: 连接建立且首包正常, 但中途停止送数据 → 空闲超时强断
         speed_bps = 0
         for speed_url in SPEED_TEST_URLS:
             downloaded = 0
@@ -1302,21 +1302,21 @@ def test_single_node(item, keep_alive_check=True):
                             if chunk:
                                 downloaded += len(chunk)
                                 last_chunk_time = now
-                            # 鎬婚绠楄秴闄?鈫?姝ｅ父鎴柇 (鎷垮凡鏈夋暟鎹畻鍚炲悙)
+                            # 总预算超限 → 正常截断 (拿已有数据算吞吐)
                             if now - t_speed > SPEED_TEST_BUDGET:
                                 break
-                            # 绌洪棽 > 3s 鏃犱换浣曟暟鎹?鈫?鏂祦绛惧悕, 绔嬪嵆涓
+                            # 空闲 > 3s 无任何数据 → 断流签名, 立即中止
                             if now - last_chunk_time > 3.0:
                                 break
                 elapsed = max(time.time() - t_speed, 0.001)
                 if downloaded > 0:
                     speed_bps = int(downloaded / elapsed)
-                    break  # 棣栦釜鎴愬姛绔偣鐨勭粨鏋滃嵆鏈夋晥
+                    break  # 首个成功端点的结果即有效
             except Exception:
                 continue
-        # 鍏ㄩ儴绔偣閮藉け璐?(涓嬭浇0瀛楄妭) 鈫?瑙嗕负鏂祦 (娲绘€у凡杩囦絾鏃犳硶鎵胯浇鏁版嵁娴?
+        # 全部端点都失败 (下载0字节) → 视为断流 (活性已过但无法承载数据流)
 
-        # 鏂祦鍒ゅ畾: 杩?70KB/s 閮借揪涓嶅埌 鈫?鏂祦/鏋佹參, 鐪熷疄涓嶅彲鐢?
+        # 断流判定: 连 70KB/s 都达不到 → 断流/极慢, 真实不可用
         is_stalled = speed_bps < SPEED_MIN_BYTES_PER_S
 
         result = {
@@ -1354,7 +1354,7 @@ def test_single_node(item, keep_alive_check=True):
 
 
 def run_liveness_test(candidates: list) -> list:
-    print(f"[*] sing-box 鍏ㄥ崗璁湡瀹炴祴娲? {len(candidates)} 鑺傜偣 (骞跺彂 {MAX_WORKERS_TEST}) ...")
+    print(f"[*] sing-box 全协议真实测活: {len(candidates)} 节点 (并发 {MAX_WORKERS_TEST}) ...")
     results = []
     done_count = [0]
 
@@ -1369,40 +1369,40 @@ def run_liveness_test(candidates: list) -> list:
             if r:
                 results.append(r)
             if done_count[0] % 40 == 0:
-                print(f"[*] 娴嬫椿杩涘害: {done_count[0]}/{len(candidates)}, 閫氳繃 {len(results)}")
+                print(f"[*] 测活进度: {done_count[0]}/{len(candidates)}, 通过 {len(results)}")
 
     alive = [r for r in results if r["alive"] and not r["is_stalled"]]
     mitm = sum(1 for r in results if r["mitm_risk"])
     stalled = sum(1 for r in results if r["is_stalled"])
-    print(f"[+] 娴嬫椿瀹屾垚: 鐪熸椿 {len(alive)} | 鏂祦娣樻卑 {stalled} | MITM 椋庨櫓 {mitm}")
-    return results  # 淇濈暀鍏ㄩ儴淇℃伅, 鍒嗙被闃舵鍐嶅喅瀹氬幓鐣?
+    print(f"[+] 测活完成: 真活 {len(alive)} | 断流淘汰 {stalled} | MITM 风险 {mitm}")
+    return results  # 保留全部信息, 分类阶段再决定去留
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 闃舵 B2: 瀹跺閾惧紡澶嶆祴 (chain relay retest)
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# ═══════════════════════════════════════════N═══════════════════════
+# 阶段 B2: 家宽链式复测 (chain relay retest)
+# ════════════════════════════════════════════════════════════════════
 
 def chain_retest(test_results: list) -> list:
-    """瀹跺閾惧紡澶嶆祴: 妯℃嫙鐢ㄦ埛 v2rayN 閾惧紡 (鍓嶇疆 鈫?瀹跺鑺傜偣 鈫?鐩爣)
+    """家宽链式复测: 模拟用户 v2rayN 链式 (前置 → 家宽节点 → 目标)
 
-    瀹炴祴鑳屾櫙: 鐢ㄦ埛鍙嶉瀹跺鑺傜偣鍦?v2rayN 閾惧紡浠ｇ悊涓嬩粎 ~50% 鍙敤銆?
-    鏍瑰洜: 鍗曡烦娴嬫椿閫氳繃 鈮?鍙岃烦鍙敤 (閮ㄥ垎鑺傜偣涓嶅厑璁?宸茶浠ｇ悊鐨勬祦閲?鍐嶅叆,
-    鎴?UDP/QUIC 鑺傜偣鏃犳硶杩?socks 閾?銆傝В鍐? CI 閲岀敤鏈€蹇瓨娲昏妭鐐瑰綋鍓嶇疆,
-    瀵瑰瀹藉€欓€夊仛鍙岃烦澶嶆祴 鈥?鍙岃烦閫氳繃鐨勬墠杩涘瀹戒笓鍖恒€?
+    实测背景: 用户反馈家宽节点在 v2rayN 链式代理下仅 ~50% 可用。
+    根因: 单跳测活通过 ≠ 双跳可用 (部分节点不允许"已被代理的流量"再入,
+    或 UDP/QUIC 节点无法过 socks 链)。解决: CI 里用最快存活节点当前置,
+    对家宽候选做双跳复测 — 双跳通过的才进家宽专区。
 
-    娴佺▼: 鍏堣窇涓€閬嶈交閲忓垎绫绘嬁鍒板瀹藉€欓€?鈫?鍙栨渶蹇瓨娲昏妭鐐瑰仛 relay 鈫?
-    瀹跺鍊欓€夐€愪釜鍙岃烦澶嶆祴 鈫?鍙岃烦涔熸椿鐨勪繚鐣? 鍙岃烦姝荤殑闄嶇骇鏅€氬尯銆?
-    杩斿洖: 鏇存柊 net_type 鍚庣殑 test_results (鍘熷璞″師鍦颁慨鏀?銆?
+    流程: 先跑一遍轻量分类拿到家宽候选 → 取最快存活节点做 relay →
+    家宽候选逐个双跳复测 → 双跳也活的保留, 双跳死的降级普通区。
+    返回: 更新 net_type 后的 test_results (原对象原地修改)。
     """
-    # 1) 杞婚噺鍒嗙被鎷垮瀹藉€欓€?(澶嶇敤 classify_and_export 鐨勫€欓€夊垽瀹? 浣嗕笉瀵煎嚭)
-    #    瀹跺鍊欓€?= ip-api/mmdb 鍏俊鍙峰垽 residential/mobile 鐨勮妭鐐?
+    # 1) 轻量分类拿家宽候选 (复用 classify_and_export 的候选判定, 但不导出)
+    #    家宽候选 = ip-api/mmdb 六信号判 residential/mobile 的节点
     ip_api_info = {}
     all_exit_ips = list({r["exit_ip"] for r in test_results if r.get("exit_ip")})
     if all_exit_ips:
         try:
             ip_api_info = ip_api_batch_lookup(all_exit_ips)
         except Exception as e:
-            print(f"[!] 閾惧紡澶嶆祴: ip-api 鎵归噺澶辫触 ({e}), 璺宠繃閾惧紡澶嶆祴")
+            print(f"[!] 链式复测: ip-api 批量失败 ({e}), 跳过链式复测")
             return test_results
 
     res_candidates = {}
@@ -1417,11 +1417,11 @@ def chain_retest(test_results: list) -> list:
             res_candidates[(r["server"].lower(), r["port"], r["proto"])] = r
 
     if not res_candidates:
-        print("[*] 閾惧紡澶嶆祴: 鏃犲瀹藉€欓€? 璺宠繃")
+        print("[*] 链式复测: 无家宽候选, 跳过")
         return test_results
-    print(f"[*] 閾惧紡澶嶆祴: {len(res_candidates)} 涓瀹藉€欓€?)
+    print(f"[*] 链式复测: {len(res_candidates)} 个家宽候选")
 
-    # 2) 閫?relay: 鍏ㄤ綋瀛樻椿鑺傜偣閲屽欢杩熸渶浣庛€侀潪瀹跺鍊欓€夎嚜宸?(閬垮厤鑷繁濂楄嚜宸?
+    # 2) 选 relay: 全体存活节点里延迟最低、非家宽候选自己 (避免自己套自己)
     alive_sorted = sorted(
         [r for r in test_results if r.get("alive") and not r.get("is_stalled")],
         key=lambda x: x.get("latency_ms", 99999))
@@ -1431,24 +1431,24 @@ def chain_retest(test_results: list) -> list:
             relay_result = r
             break
     if not relay_result:
-        print("[!] 閾惧紡澶嶆祴: 鏃犲彲鐢?relay 鑺傜偣, 璺宠繃")
+        print("[!] 链式复测: 无可用 relay 节点, 跳过")
         return test_results
     relay_out = relay_result.get("outbound")
     if not relay_out:
-        # 閲嶆柊瑙ｆ瀽 relay 鐨?raw 鎷?outbound
+        # 重新解析 relay 的 raw 拿 outbound
         p = parse_node_uri(relay_result["raw"])
         if p:
             relay_out = p[0]
     if not relay_out:
-        print("[!] 閾惧紡澶嶆祴: relay outbound 鏋勫缓澶辫触, 璺宠繃")
+        print("[!] 链式复测: relay outbound 构建失败, 跳过")
         return test_results
-    # relay 蹇呴』鍓ョ detour (鍓嶇疆閾惧鐢ㄦ椂闃插惊鐜?
+    # relay 必须剥离 detour (前置链复用时防循环)
     relay_out = dict(relay_out)
     relay_out.pop("detour", None)
-    print(f"[*] 閾惧紡 relay: {relay_result['proto']} {relay_result['server']}:{relay_result['port']} "
-          f"(寤惰繜 {relay_result['latency_ms']}ms)")
+    print(f"[*] 链式 relay: {relay_result['proto']} {relay_result['server']}:{relay_result['port']} "
+          f"(延迟 {relay_result['latency_ms']}ms)")
 
-    # 3) 瀹跺鍊欓€夐€愪釜鍙岃烦澶嶆祴 (娉ㄥ叆 CHAIN_RELAY_OUT, test_single_node 鑷姩鍔?detour)
+    # 3) 家宽候选逐个双跳复测 (注入 CHAIN_RELAY_OUT, test_single_node 自动加 detour)
     os.environ["CHAIN_RELAY_OUT"] = json.dumps(relay_out)
     chain_alive, chain_dead = [], []
     try:
@@ -1466,23 +1466,23 @@ def chain_retest(test_results: list) -> list:
     finally:
         os.environ.pop("CHAIN_RELAY_OUT", None)
 
-    # 4) 鍙岃烦澶辫触鐨?鈫?闄嶇骇鏅€氬尯 (涓嶄粠璁㈤槄鍒犻櫎, 鐢ㄦ埛鐩磋繛鍦烘櫙浠嶅彲鑳藉彲鐢?
+    # 4) 双跳失败的 → 降级普通区 (不从订阅删除, 用户直连场景仍可能可用)
     for r in chain_dead:
         r["_chain_failed"] = True
 
-    print(f"[+] 閾惧紡澶嶆祴瀹屾垚: 鍙岃烦鍙敤 {len(chain_alive)} | 鍙岃烦澶辫触闄嶇骇 {len(chain_dead)}")
+    print(f"[+] 链式复测完成: 双跳可用 {len(chain_alive)} | 双跳失败降级 {len(chain_dead)}")
     return test_results
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 闃舵 C: 鍑哄彛 IP 鎵归噺鎯呮姤 (ip-api.com 鍏嶈垂 batch) + 绂荤嚎鍏滃簳
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 阶段 C: 出口 IP 批量情报 (ip-api.com 免费 batch) + 离线兜底
+# ═══════════════════════════════════════════N═══════════════════════
 
 def ip_api_batch_lookup(ip_list: list) -> dict:
-    """ip-api.com batch (鍏嶈垂 HTTP, 鈮?00/req, 15 req/min 鈫?1500 IP/min)"""
+    """ip-api.com batch (免费 HTTP, ≤100/req, 15 req/min → 1500 IP/min)"""
     info = {}
     session = requests.Session()
-    session.trust_env = True  # 鐩磋繛鍗冲彲; ip-api.com 鍏嶈垂灞傚叏鐞冨彲杈?(CI 鏃犱唬鐞?鏈湴璧扮郴缁熶唬鐞嗗潎鍙?
+    session.trust_env = True  # 直连即可; ip-api.com 免费层全球可达 (CI 无代理/本地走系统代理均可)
     total_batches = (len(ip_list) + IP_API_BATCH_SIZE - 1) // IP_API_BATCH_SIZE
     for bi, i in enumerate(range(0, len(ip_list), IP_API_BATCH_SIZE), 1):
         chunk = ip_list[i:i + IP_API_BATCH_SIZE]
@@ -1503,13 +1503,13 @@ def ip_api_batch_lookup(ip_list: list) -> dict:
             except Exception:
                 time.sleep(2)
         if total_batches >= 3 and (bi % 5 == 0 or bi == total_batches):
-            print(f"[*] ip-api 杩涘害: 鎵?{bi}/{total_batches} ({len(info)} IP 宸叉煡)")
+            print(f"[*] ip-api 进度: 批 {bi}/{total_batches} ({len(info)} IP 已查)")
         time.sleep(IP_API_BATCH_RPS_INTERVAL)
     return info
 
 
 def offline_ip_lookup(ip: str, country_reader, asn_reader) -> tuple:
-    """GeoLite2 绂荤嚎鏌ヨ 鈫?(country, asn, org)"""
+    """GeoLite2 离线查询 → (country, asn, org)"""
     country, asn, org = None, None, None
     try:
         c = country_reader.get(ip)
@@ -1541,9 +1541,9 @@ def get_rdns(ip: str) -> str:
 
 def classify_network_type(ip: str, country: str, asn, org: str, ip_api_rec: dict = None) -> tuple:
     """
-    杩斿洖 (net_type, confidence):
-      net_type 鈭?{datacenter, residential, mobile, cdn, unknown}
-    浼樺厛绾? ip-api.com hosting/mobile 瀛楁 > CDN 缃戞 > ASN 鐧?榛戝悕鍗?> 鍚嶇О鍏抽敭璇?
+    返回 (net_type, confidence):
+      net_type ∈ {datacenter, residential, mobile, cdn, unknown}
+    优先级: ip-api.com hosting/mobile 字段 > CDN 网段 > ASN 白/黑名单 > 名称关键词
     """
     ip_str = str(ip)
     try:
@@ -1551,7 +1551,7 @@ def classify_network_type(ip: str, country: str, asn, org: str, ip_api_rec: dict
     except ValueError:
         return "unknown", 0
 
-    # 1) CDN / Anycast 缃戞 (纭垽鎹?
+    # 1) CDN / Anycast 网段 (硬判据)
     for net in CLOUDFLARE_IP_NETWORKS:
         if ip_obj in net:
             return "cdn", 100
@@ -1572,7 +1572,7 @@ def classify_network_type(ip: str, country: str, asn, org: str, ip_api_rec: dict
     mobile_flag = False
     proxy_flag = False
 
-    # 2) ip-api.com 鍦ㄧ嚎瀛楁 (鏈€楂樺彲淇?
+    # 2) ip-api.com 在线字段 (最高可信)
     if ip_api_rec:
         hosting_flag = bool(ip_api_rec.get("hosting"))
         mobile_flag = bool(ip_api_rec.get("mobile"))
@@ -1585,22 +1585,22 @@ def classify_network_type(ip: str, country: str, asn, org: str, ip_api_rec: dict
 
     if hosting_flag:
         return "datacenter", 90
-    # 鈽?proxy/VPN/Tor 鍑哄彛鏍囧織 (ip-api) 鈥?纭惁鍐冲瀹?姘戠敤
-    # 瀹炴祴 AS62610 Zenlayer (鏀惰喘 speakeasy DSL legacy 娈?: hosting=false 浣?proxy=true
-    # 姝ょ被"鏈烘埧鏀惰喘瀹跺娈?鏄亣瀹跺涓昏褰㈡€? rDNS 甯?dsl/pppoe 涔熶笉鑳戒俊
+    # ★ proxy/VPN/Tor 出口标志 (ip-api) — 硬否决家宽/民用
+    # 实测 AS62610 Zenlayer (收购 speakeasy DSL legacy 段): hosting=false 但 proxy=true
+    # 此类"机房收购家宽段"是假家宽主要形态, rDNS 带 dsl/pppoe 也不能信
     if proxy_flag:
         return "datacenter", 88
     if mobile_flag:
         return "mobile", 85
 
-    # 3) ASN 鐧?榛戝悕鍗?
+    # 3) ASN 白/黑名单
     if asn_int:
         if asn_int in DATACENTER_ASNS:
             return "datacenter", 80
         if asn_int in RESIDENTIAL_ASNS:
             return "residential", 82
 
-    # 4) ISP 鍚嶇О鍏抽敭璇?
+    # 4) ISP 名称关键词
     if org_lower:
         for kw in IDC_NAME_PATTERNS:
             if kw in org_lower:
@@ -1609,7 +1609,7 @@ def classify_network_type(ip: str, country: str, asn, org: str, ip_api_rec: dict
             if kw in org_lower:
                 return "residential", 70
 
-    # 5) rDNS 鍏滃簳
+    # 5) rDNS 兜底
     rdns = get_rdns(ip_str)
     if rdns:
         for kw in IDC_NAME_PATTERNS:
@@ -1622,12 +1622,12 @@ def classify_network_type(ip: str, country: str, asn, org: str, ip_api_rec: dict
     return "unknown", 30
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 鑺傜偣 鈫?鍚勫鎴风閰嶇疆杞崲
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 节点 → 各客户端配置转换
+# ═══════════════════════════════════════════N═══════════════════════
 
 def outbound_to_clash(node: dict, name: str) -> dict:
-    """sing-box outbound 鈫?Clash (Meta/mihomo) proxy dict"""
+    """sing-box outbound → Clash (Meta/mihomo) proxy dict"""
     t = node.get("type")
     server, port = node["server"], node["server_port"]
     proxy = {"name": name, "server": server, "port": port, "udp": True}
@@ -1743,9 +1743,9 @@ def outbound_to_clash(node: dict, name: str) -> dict:
 
 
 def outbound_to_v2ray_link(node: dict, name: str) -> str:
-    """sing-box outbound 鈫?v2rayN 鍏煎 URI"""
+    """sing-box outbound → v2rayN 兼容 URI"""
     t = node.get("type")
-    # 绔彛璺宠穬鑺傜偣 (hy2 mport): 鏃?server_port 鏃跺彇 server_ports 棣栧尯闂磋捣濮嬬鍙?
+    # 端口跳跃节点 (hy2 mport): 无 server_port 时取 server_ports 首区间起始端口
     if "server_port" in node:
         port = node["server_port"]
     elif node.get("server_ports"):
@@ -1865,9 +1865,9 @@ def outbound_to_v2ray_link(node: dict, name: str) -> str:
         query = urllib.parse.urlencode(q)
         return f"trojan://{urllib.parse.quote(node['password'])}@{server}:{port}?{query}#{urllib.parse.quote(name)}"
     if t == "shadowsocks":
-        # SIP002: userinfo = urlsafe-base64(method:password), 鈽?蹇呴』淇濈暀 padding ("=")
-        # 瀹炴祴: rstrip("=") 鐮?padding 鍚?v2rayN 瑙ｆ瀽澶辫触 (鏃?padding 鐨勭暩褰?base64)
-        # urlsafe 瀛楁瘝琛?(A-Za-z0-9-_) + "=" 鍧囦负 URI 鍚堟硶瀛楃, 涓嶉渶鍐?quote (quote 鍙嶈€岀牬鍧?"=")
+        # SIP002: userinfo = urlsafe-base64(method:password), ★ 必须保留 padding ("=")
+        # 实测: rstrip("=") 砍 padding 后 v2rayN 解析失败 (无 padding 的畸形 base64)
+        # urlsafe 字母表 (A-Za-z0-9-_) + "=" 均为 URI 合法字符, 不需再 quote (quote 反而破坏 "=")
         userinfo = base64.urlsafe_b64encode(
             f"{node['method']}:{node['password']}".encode()).decode()
         return f"ss://{userinfo}@{server}:{port}#{urllib.parse.quote(name)}"
@@ -1913,13 +1913,13 @@ def outbound_to_singbox(node: dict, name: str) -> dict:
     return n
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 鍒嗙被 + 瀵煎嚭
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 分类 + 导出
+# ═══════════════════════════════════════════N═══════════════════════
 
 def scamalytics_fraud_score(ip: str) -> int:
-    """Scamalytics 鍏嶈垂椋庢帶璇勫垎 (HTML 鎶撳彇, subs-check 鍚屾鏂规)
-    杩斿洖 0-100: 瓒婇珮瓒婂嵄闄? 澶辫触杩斿洖 -1 (涓嶅弬涓庡垽瀹?"""
+    """Scamalytics 免费风控评分 (HTML 抓取, subs-check 同款方案)
+    返回 0-100: 越高越危险; 失败返回 -1 (不参与判定)"""
     try:
         r = DIRECT_SESSION.get(f"https://scamalytics.com/ip/{ip}", timeout=10)
         if r.status_code != 200:
@@ -1931,10 +1931,10 @@ def scamalytics_fraud_score(ip: str) -> int:
 
 
 def ipapi_is_verify(ip: str) -> dict:
-    """ipapi.is 鍏嶈垂浜ゅ弶婧?(1000 req/澶? 鏃?key)
-    瀹炴祴瀵?AS62610 Zenlayer (鏀惰喘 speakeasy DSL 娈典吉瑁呭瀹? 鑳界粰鍑?
-    company=Bunny Communications; 瀵圭湡瀹跺 (SK Broadband) 缁欒繍钀ュ晢鍚嶃€?
-    浠呯敤鍏?company/asn 瀛楁鍋氬瀹藉€欓€夌殑浜屾鍚﹀喅銆傚け璐ヨ繑鍥?{}"""
+    """ipapi.is 免费交叉源 (1000 req/天, 无 key)
+    实测对 AS62610 Zenlayer (收购 speakeasy DSL 段伪装家宽) 能给出
+    company=Bunny Communications; 对真家宽 (SK Broadband) 给运营商名。
+    仅用其 company/asn 字段做家宽候选的二次否决。失败返回 {}"""
     try:
         r = DIRECT_SESSION.get(f"https://api.ipapi.is/?q={ip}", timeout=10)
         if r.status_code != 200:
@@ -1947,8 +1947,8 @@ def ipapi_is_verify(ip: str) -> dict:
 
 
 def classify_and_export(test_results: list):
-    print("[*] 鍑哄彛 IP 鎯呮姤涓庡垎绫?...")
-    # 鏀堕泦鍏ㄩ儴鍑哄彛 IP
+    print("[*] 出口 IP 情报与分类 ...")
+    # 收集全部出口 IP
     all_exit_ips = []
     seen_ip = set()
     no_exit_ip = []
@@ -1956,25 +1956,25 @@ def classify_and_export(test_results: list):
         if r["exit_ip"] and r["exit_ip"] not in seen_ip:
             seen_ip.add(r["exit_ip"])
             all_exit_ips.append(r["exit_ip"])
-    print(f"[*] 寰呮煡璇㈠嚭鍙?IP: {len(all_exit_ips)} 涓?(ip-api.com 鎵归噺 {len(test_results)} 鑺傜偣)")
+    print(f"[*] 待查询出口 IP: {len(all_exit_ips)} 个 (ip-api.com 批量 {len(test_results)} 节点)")
 
     ip_api_info = {}
     scam_scores = {}
     if all_exit_ips:
         try:
             est_batches = (len(all_exit_ips) + IP_API_BATCH_SIZE - 1) // IP_API_BATCH_SIZE
-            print(f"[*] ip-api 鎵归噺: {est_batches} 鎵?脳 ~4.2s 鈮?{est_batches * 4.2:.0f}s (鍏嶈垂闄?15 req/min, 璇疯€愬績) ...")
+            print(f"[*] ip-api 批量: {est_batches} 批 × ~4.2s ≈ {est_batches * 4.2:.0f}s (免费限 15 req/min, 请耐心) ...")
             ip_api_info = ip_api_batch_lookup(all_exit_ips)
-            print(f"[+] ip-api.com 鎵归噺鎯呮姤: {len(ip_api_info)}/{len(all_exit_ips)}")
+            print(f"[+] ip-api.com 批量情报: {len(ip_api_info)}/{len(all_exit_ips)}")
         except Exception as e:
-            print(f"[!] ip-api 鎵归噺澶辫触, 灏嗗叏閲忚蛋绂荤嚎: {e}")
+            print(f"[!] ip-api 批量失败, 将全量走离线: {e}")
 
     country_reader = asn_reader = None
     try:
         country_reader = maxminddb.open_database(os.path.join(RUNTIME_DIR, "Country.mmdb"))
         asn_reader = maxminddb.open_database(os.path.join(RUNTIME_DIR, "ASN.mmdb"))
     except Exception as e:
-        print(f"[!] MaxMind 鏁版嵁搴撴墦寮€澶辫触: {e}")
+        print(f"[!] MaxMind 数据库打开失败: {e}")
 
     nodes = []
     for r in test_results:
@@ -1988,15 +1988,15 @@ def classify_and_export(test_results: list):
             m = re.match(r"AS(\d+)", asn)
             asn = int(m.group(1)) if m else None
 
-        # 鍦ㄧ嚎鎯呮姤缂哄け 鈫?绂荤嚎 mmdb 鍏滃簳
+        # 在线情报缺失 → 离线 mmdb 兜底
         if country_reader and (not country or not asn):
             off_c, off_asn, off_org = offline_ip_lookup(exit_ip, country_reader, asn_reader)
             country = country or off_c
             asn = asn or off_asn
             org = org or off_org
 
-        # 鈽?鍑哄彛 IP 鏌ヤ笉鍒板浗瀹?(浜戝唴缃?涓浆闅ч亾) 鈫?鍥為€€鐢ㄥ叆鍙ｆ湇鍔″櫒 IP 瀹氫綅鍥藉
-        #    (涓浆鑺傜偣鍑哄彛甯告槸鍐呯綉鍦板潃, mmdb 涔熸煡涓嶅埌; 鍏ュ彛鍥?鈮?鍑哄彛鍥戒絾鑷冲皯缁欑敤鎴峰彲鐢ㄥ湴鍖?
+        # ★ 出口 IP 查不到国家 (云内网/中转隧道) → 回退用入口服务器 IP 定位国家
+        #    (中转节点出口常是内网地址, mmdb 也查不到; 入口国 ≠ 出口国但至少给用户可用地区)
         if (not country or country in ("OTHER", "ZZ")) and r.get("server"):
             srv_ip = r["server"] if is_ip_literal(r["server"]) else resolve_host(r["server"])
             if srv_ip and country_reader:
@@ -2009,7 +2009,7 @@ def classify_and_export(test_results: list):
         net_type, confidence = classify_network_type(
             exit_ip, country, asn, org, rec or None)
 
-        # 鏃犵湡瀹炲嚭鍙?IP 鐨勮妭鐐? 鍥藉鏈煡, 涓嶅叆瀹跺鍖?
+        # 无真实出口 IP 的节点: 国家未知, 不入家宽区
         if not exit_ip:
             country = country or "OTHER"
 
@@ -2037,46 +2037,46 @@ def classify_and_export(test_results: list):
     if asn_reader:
         asn_reader.close()
 
-    # 鈹€鈹€ 椋庨櫓杩囨护 鈹€鈹€
-    # MITM 鍔寔鑺傜偣: 楂樺嵄, 鐩存帴涓㈠純 (204 鑳介€氫絾璇佷功琚姭鎸?= 涓棿浜?
+    # ── 风险过滤 ──
+    # MITM 劫持节点: 高危, 直接丢弃 (204 能通但证书被劫持 = 中间人)
     safe_nodes = [n for n in nodes if not n["mitm_risk"]]
     mitm_dropped = len(nodes) - len(safe_nodes)
-    # 鏂祦鑺傜偣宸叉棤 (鍦?liveness 闃舵娣樻卑), 浣?double-check
+    # 断流节点已无 (在 liveness 阶段淘汰), 但 double-check
     safe_nodes = [n for n in safe_nodes if not n["is_stalled"]]
-    print(f"[*] MITM 鍔寔楂橀闄╄妭鐐瑰凡鍓旈櫎: {mitm_dropped}")
+    print(f"[*] MITM 劫持高风险节点已剔除: {mitm_dropped}")
 
-    # 鈹€鈹€ Scamalytics 椋庢帶璇勫垎 (鍏嶈垂 HTML, 閫愪釜; 鍙煡瀹跺鍊欓€?+ 鎶芥牱鏅€氳妭鐐? 鈹€鈹€
-    # 瀹跺鍊欓€? 鍏ㄦ煡 (瀹佺己姣嬫互); 鏅€氳妭鐐? 姣?IP 鏌ヤ竴娆?(閫氬父 <= 鍑哄彛 IP 鏁?
+    # ── Scamalytics 风控评分 (免费 HTML, 逐个; 只查家宽候选 + 抽样普通节点) ──
+    # 家宽候选: 全查 (宁缺毋滥); 普通节点: 每 IP 查一次 (通常 <= 出口 IP 数)
     scam_candidates = set()
     for n in safe_nodes:
         if n["net_type"] in ("residential", "mobile") and n["exit_ip"]:
             scam_candidates.add(n["exit_ip"])
     if scam_candidates:
-        print(f"[*] Scamalytics 椋庢帶璇勫垎: 鏌ヨ {len(scam_candidates)} 涓瀹藉€欓€夊嚭鍙?IP ...")
+        print(f"[*] Scamalytics 风控评分: 查询 {len(scam_candidates)} 个家宽候选出口 IP ...")
         def _scam(ip):
             return ip, scamalytics_fraud_score(ip)
         with ThreadPoolExecutor(max_workers=6) as ex:
             for ip, score in ex.map(_scam, scam_candidates):
                 scam_scores[ip] = score
         got = sum(1 for v in scam_scores.values() if v >= 0)
-        print(f"[+] Scamalytics 璇勫垎鑾峰緱: {got}/{len(scam_candidates)}")
+        print(f"[+] Scamalytics 评分获得: {got}/{len(scam_candidates)}")
 
-    # 鈹€鈹€ ipapi.is 浜ゅ弶鏍搁獙 (鍙煡瀹跺鍊欓€? 鍏嶈垂 1000 娆?澶? 鈹€鈹€
-    # ip-api 鍒?hosting/proxy 涔熸湁婕?(浼瀹跺: 鏀惰喘 DSL 娈电殑浜戣竟缃戠粶)銆?
-    # ipapi.is 鐙珛鏁版嵁婧? company 鍚?IDC 璇?鈫?鍚﹀喅瀹跺
+    # ── ipapi.is 交叉核验 (只查家宽候选, 免费 1000 次/天) ──
+    # ip-api 判 hosting/proxy 也有漏 (伪装家宽: 收购 DSL 段的云边网络)。
+    # ipapi.is 独立数据源: company 含 IDC 词 → 否决家宽
     ipapi_verify = {}
     verify_candidates = set()
     for n in safe_nodes:
         if n["net_type"] in ("residential", "mobile") and n["exit_ip"]:
             verify_candidates.add(n["exit_ip"])
     if verify_candidates:
-        print(f"[*] ipapi.is 浜ゅ弶鏍搁獙: {len(verify_candidates)} 涓瀹藉€欓€?...")
+        print(f"[*] ipapi.is 交叉核验: {len(verify_candidates)} 个家宽候选 ...")
         def _verify(ip):
             return ip, ipapi_is_verify(ip)
         with ThreadPoolExecutor(max_workers=4) as ex:
             for ip, info in ex.map(_verify, verify_candidates):
                 ipapi_verify[ip] = info
-        # 鍚﹀喅: company/asn 鍚満鎴胯瘝
+        # 否决: company/asn 含机房词
         vetoed = 0
         for n in safe_nodes:
             if n["net_type"] not in ("residential", "mobile"):
@@ -2094,21 +2094,21 @@ def classify_and_export(test_results: list):
                 n["confidence"] = 85
                 vetoed += 1
         if vetoed:
-            print(f"[*] ipapi.is 鍚﹀喅鍋囧瀹? {vetoed} 涓?(浜戝晢鏀惰喘瀹跺娈典吉瑁?")
+            print(f"[*] ipapi.is 否决假家宽: {vetoed} 个 (云商收购家宽段伪装)")
 
-    # 椋庨櫓鍒?>= 75 鐨勫瀹藉€欓€夐檷绾т负鏅€?(fraud 姹?琚互鐢?IP 缁濅笉鍏ュ瀹藉尯)
+    # 风险分 >= 75 的家宽候选降级为普通 (fraud 池/被滥用 IP 绝不入家宽区)
     downgraded = 0
     for n in safe_nodes:
         sc = scam_scores.get(n["exit_ip"], -1)
         n["fraud_score"] = sc
         if n["net_type"] in ("residential", "mobile") and sc >= 75:
-            n["net_type"] = "datacenter"  # 楂?fraud 鍒? 澶ф鐜囦唬鐞嗘睜婊ョ敤 IP
+            n["net_type"] = "datacenter"  # 高 fraud 分: 大概率代理池滥用 IP
             n["confidence"] = 60
             downgraded += 1
     if downgraded:
-        print(f"[*] 楂?fraud 鍒?(鈮?5) 瀹跺鍊欓€夐檷绾? {downgraded} 涓?)
+        print(f"[*] 高 fraud 分 (≥75) 家宽候选降级: {downgraded} 个")
 
-    # 鈹€鈹€ 鍘婚噸 (鍚屽嚭鍙P+绔彛 鍙暀鏈€蹇? 鈹€鈹€
+    # ── 去重 (同出口IP+端口 只留最快) ──
     best_by_key = {}
     for n in safe_nodes:
         key = f"{n['exit_ip']}:{n['port']}" if n["exit_ip"] else f"{n['server']}:{n['port']}|{n['raw'][:64]}"
@@ -2117,10 +2117,10 @@ def classify_and_export(test_results: list):
             best_by_key[key] = n
     unique_nodes = list(best_by_key.values())
     dup_dropped = len(safe_nodes) - len(unique_nodes)
-    print(f"[*] 鍘婚噸: {len(safe_nodes)} 鈫?{len(unique_nodes)} (鍓旈櫎閲嶅 {dup_dropped})")
+    print(f"[*] 去重: {len(safe_nodes)} → {len(unique_nodes)} (剔除重复 {dup_dropped})")
 
-    # 鍘婚噸: 鍑哄彛IP+绔彛 鍞竴鍖? 瀹跺鍖轰弗鏍奸槻鍚孖P鍒峰睆
-    # 鈽?閾惧紡澶嶆祴 (chain_retest) 鍙岃烦澶辫触鐨勫瀹藉€欓€?鈫?涓嶈繘瀹跺涓撳尯 (闄嶇骇鏅€?
+    # 去重: 出口IP+端口 唯一化, 家宽区严格防同IP刷屏
+    # ★ 链式复测 (chain_retest) 双跳失败的家宽候选 → 不进家宽专区 (降级普通)
     chain_failed_raws = set()
     for r in test_results:
         if r.get("_chain_failed"):
@@ -2136,24 +2136,24 @@ def classify_and_export(test_results: list):
             if n["exit_ip"] and n["exit_ip"] not in res_seen_ip:
                 res_seen_ip.add(n["exit_ip"])
                 residential.append(n)
-    # fraud 鍒嗘瀬楂?(鈮?0) 鐨勮妭鐐规暣浣撳墧闄?(浠讳綍鍖洪兘涓嶈)
+    # fraud 分极高 (≥90) 的节点整体剔除 (任何区都不要)
     before_total = len(unique_nodes)
     unique_nodes = [n for n in unique_nodes if not (0 <= n.get("fraud_score", -1) >= 90)]
     residential = [n for n in residential if not (0 <= n.get("fraud_score", -1) >= 90)]
     if len(unique_nodes) < before_total:
-        print(f"[*] 鏋侀珮鍗辫妭鐐?(fraud鈮?0) 鍓旈櫎: {before_total - len(unique_nodes)} 涓?)
+        print(f"[*] 极高危节点 (fraud≥90) 剔除: {before_total - len(unique_nodes)} 个")
 
     non_residential = [n for n in unique_nodes if n not in residential]
-    print(f"[*] 瀹跺/绉诲姩缃戠粶鑺傜偣: {len(residential)} | 鏅€?鏈烘埧/CDN): {len(non_residential)}")
+    print(f"[*] 家宽/移动网络节点: {len(residential)} | 普通(机房/CDN): {len(non_residential)}")
 
-    # 鎺掑簭: 瀹跺鍦ㄥ墠, 寤惰繜鍗囧簭
+    # 排序: 家宽在前, 延迟升序
     unique_nodes.sort(key=lambda x: (0 if x in residential else 1, x["latency_ms"]))
     residential.sort(key=lambda x: x["latency_ms"])
     non_residential.sort(key=lambda x: x["latency_ms"])
-    # 鈽?閾惧紡澶嶆祴鍙岃烦澶辫触鐨勫瀹?鈫?闄嶇骇鏅€氬尯 (v2rayN 閾惧紡鍦烘櫙涓嶅彲闈?
-    #    淇濈暀鍦ㄦ€昏闃?鍥藉璁㈤槄閲?(鐩磋繛鍦烘櫙浠嶅彲鐢?, 鍙槸閫€鍑哄瀹戒笓鍖?
+    # ★ 链式复测双跳失败的家宽 → 降级普通区 (v2rayN 链式场景不可靠)
+    #    保留在总订阅/国家订阅里 (直连场景仍可用), 只是退出家宽专区
 
-    # 閲嶅缓 outbound (娴嬫椿闃舵鐨?outbound 宸查獙璇佸彲鐢?; 鍓ョ娴嬭瘯涓撶敤瀛楁 (detour 绛夌粷涓嶅叆璁㈤槄)
+    # 重建 outbound (测活阶段的 outbound 已验证可用); 剥离测试专用字段 (detour 等绝不入订阅)
     for n in unique_nodes:
         parsed = parse_node_uri(n["raw"])
         if parsed:
@@ -2173,10 +2173,10 @@ def make_node_name(item, idx, force_residential=False):
     is_res = item["net_type"] in ("residential", "mobile") and (item["confidence"] >= 60 or force_residential)
     tag = ""
     if is_res:
-        tag = " (瀹跺)" if item["net_type"] == "residential" else " (绉诲姩瀹跺)"
-    # Scamalytics 椋庢帶鍒? 楂橀闄╄妭鐐瑰悕鍐呮爣娉?(R鍒嗘暟), 浣庡嵄涓嶆爣 (淇濇寔绠€娲?
+        tag = " (家宽)" if item["net_type"] == "residential" else " (移动家宽)"
+    # Scamalytics 风控分: 高风险节点名内标注 (R分数), 低危不标 (保持简洁)
     fraud = item.get("fraud_score", -1)
-    risk_tag = f" R{fraud}" if 0 <= fraud < 75 and fraud >= 40 else (" 鈿燫" if fraud >= 75 else "")
+    risk_tag = f" R{fraud}" if 0 <= fraud < 75 and fraud >= 40 else (" ⚠R" if fraud >= 75 else "")
     return f"{flag} {cname} {idx:02d}{tag}{risk_tag} - xiaohe"
 
 
@@ -2197,14 +2197,14 @@ def export_all(unique_nodes, residential, non_residential):
             sb_nodes.append(outbound_to_singbox(ob, name))
         return links, proxies, sb_nodes
 
-    # 1) 鍏ㄩ噺
+    # 1) 全量
     all_links, all_proxies, all_sb = build_group(unique_nodes)
     with open(os.path.join(OUTPUT_DIR, "v2ray.txt"), "w", encoding="utf-8") as f:
         f.write(base64.b64encode("\n".join(all_links).encode()).decode())
     export_clash_yaml(all_proxies, os.path.join(OUTPUT_DIR, "clash.yaml"))
     export_singbox_json(all_sb, os.path.join(OUTPUT_DIR, "singbox.json"))
 
-    # 2) 瀹跺鎬昏闃?
+    # 2) 家宽总订阅
     res_links, res_proxies, res_sb = build_group(residential, force_res=True)
     with open(os.path.join(OUTPUT_DIR, "residential.txt"), "w", encoding="utf-8") as f:
         f.write(base64.b64encode("\n".join(res_links).encode()).decode())
@@ -2217,7 +2217,7 @@ def export_all(unique_nodes, residential, non_residential):
             if os.path.exists(p):
                 os.remove(p)
 
-    # 3) 鎸夊浗瀹?- 鏅€氬尯
+    # 3) 按国家 - 普通区
     shutil.rmtree(COUNTRY_DIR, ignore_errors=True)
     os.makedirs(COUNTRY_DIR, exist_ok=True)
     by_cc = {}
@@ -2230,7 +2230,7 @@ def export_all(unique_nodes, residential, non_residential):
         export_clash_yaml(p, os.path.join(COUNTRY_DIR, f"clash-{cc}.yaml"))
         export_singbox_json(s, os.path.join(COUNTRY_DIR, f"singbox-{cc}.json"))
 
-    # 4) 鎸夊浗瀹?- 瀹跺鍖?
+    # 4) 按国家 - 家宽区
     shutil.rmtree(RESIDENTIAL_COUNTRY_DIR, ignore_errors=True)
     os.makedirs(RESIDENTIAL_COUNTRY_DIR, exist_ok=True)
     res_by_cc = {}
@@ -2243,7 +2243,7 @@ def export_all(unique_nodes, residential, non_residential):
         export_clash_yaml(p, os.path.join(RESIDENTIAL_COUNTRY_DIR, f"clash-{cc}.yaml"))
         export_singbox_json(s, os.path.join(RESIDENTIAL_COUNTRY_DIR, f"singbox-{cc}.json"))
 
-    print(f"[*] 瀵煎嚭瀹屾瘯: 鍏ㄩ噺 {len(all_links)} | 瀹跺 {len(res_links)}")
+    print(f"[*] 导出完毕: 全量 {len(all_links)} | 家宽 {len(res_links)}")
     return len(all_links), len(res_links)
 
 
@@ -2282,14 +2282,14 @@ def export_singbox_json(sb_nodes, filepath):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# README 鐢熸垚
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# README 生成
+# ═══════════════════════════════════════════N═══════════════════════
 
 def update_readme(total_count, res_count):
     repo_name = os.environ.get("GITHUB_REPOSITORY", "georgezhou2024/reesub-george").strip()
     cache_bust = ""
-    # 绉佹湁鍖栭儴缃?Worker 鑴氭湰閲岀殑浠撳簱鍙傛暟 (榛樿鍊煎厹搴?
+    # 私有化部署 Worker 脚本里的仓库参数 (默认值兜底)
     try:
         owner, repo = repo_name.split("/", 1)
     except ValueError:
@@ -2323,67 +2323,67 @@ def update_readme(total_count, res_count):
             flag = get_country_flag(cc)
             name = COUNTRY_NAMES.get(cc, cc)
             cnt = counts[cc]
-            v2 = f"[CDN 鐩撮摼](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/{sub}/{cc}.txt) 路 [Raw 鐩撮摼](https://raw.githubusercontent.com/{repo_name}/main/output/{sub}/{cc}.txt)"
-            cl = f"[CDN 鐩撮摼](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/{sub}/clash-{cc}.yaml) 路 [Raw 鐩撮摼](https://raw.githubusercontent.com/{repo_name}/main/output/{sub}/clash-{cc}.yaml)"
-            sb = f"[CDN 鐩撮摼](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/{sub}/singbox-{cc}.json) 路 [Raw 鐩撮摼](https://raw.githubusercontent.com/{repo_name}/main/output/{sub}/singbox-{cc}.json)"
+            v2 = f"[CDN 直链](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/{sub}/{cc}.txt) · [Raw 直链](https://raw.githubusercontent.com/{repo_name}/main/output/{sub}/{cc}.txt)"
+            cl = f"[CDN 直链](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/{sub}/clash-{cc}.yaml) · [Raw 直链](https://raw.githubusercontent.com/{repo_name}/main/output/{sub}/clash-{cc}.yaml)"
+            sb = f"[CDN 直链](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/{sub}/singbox-{cc}.json) · [Raw 直链](https://raw.githubusercontent.com/{repo_name}/main/output/{sub}/singbox-{cc}.json)"
             rows.append(f"| {flag} {name} | {cnt} | {v2} | {cl} | {sb} |")
-        return "\n".join(rows) if rows else "| 鏆傛棤鍙敤鑺傜偣 | 0 | - | - | - |"
+        return "\n".join(rows) if rows else "| 暂无可用节点 | 0 | - | - | - |"
 
     res_table = table_rows(res_counts, "residential-by-country")
     normal_table = table_rows(normal_counts, "by-country")
 
-    readme = f"""# 馃殌 鍏嶈垂鑺傜偣鑷姩娴嬫椿璁㈤槄姹?(鍚湡瀹炲瀹?浣忓畢IP鐢勯€?
+    readme = f"""# 🚀 免费节点自动测活订阅池 (含真实家宽/住宅IP甄选)
 
-> 馃懁 **瀹氬埗瑙勮寖鍛藉悕**: 鎵€鏈夎闃呰妭鐐瑰潎閲嶅懡鍚嶄负 `鍥芥棗 鍦板尯 搴忓彿 (瀹跺) - xiaohe`
-> 鈿?**鐪熷疄鍙敤淇濋殰**: 鎵€鏈夎妭鐐圭敱 `sing-box v{SINGBOX_VERSION}` 鍐呮牳寤虹珛瀹為檯浠ｇ悊闅ч亾, 瀹屾垚鐪熷疄 HTTPS 鍙屽悜浼犺緭鎻℃墜 + 鍑哄彛 IP 绌块€忛獙璇?+ Cloudflare 闄愰€熶笅杞芥柇娴佹娴?+ TLS 璇佷功鏍￠獙 (MITM 鍔寔璇嗗埆), 鎷掔粷铏氬亣閫氱晠銆佹柇娴佽妭鐐逛笌楂樺嵄鍔寔鑺傜偣銆?
-> 馃洝锔?**鍏ㄥ崗璁敮鎸?*: VLESS (Reality/Vision) 路 VMESS 路 Trojan 路 Shadowsocks 路 Hysteria2 路 TUIC 路 AnyTLS
+> 👤 **定制规范命名**: 所有订阅节点均重命名为 `国旗 地区 序号 (家宽) - xiaohe`
+> ⚡ **真实可用保障**: 所有节点由 `sing-box v{SINGBOX_VERSION}` 内核建立实际代理隧道, 完成真实 HTTPS 双向传输握手 + 出口 IP 穿透验证 + Cloudflare 限速下载断流检测 + TLS 证书校验 (MITM 劫持识别), 拒绝虚假通畅、断流节点与高危劫持节点。
+> 🛡️ **全协议支持**: VLESS (Reality/Vision) · VMESS · Trojan · Shadowsocks · Hysteria2 · TUIC · AnyTLS
 
 ---
 
-## 馃搶 鍏ㄩ儴鑺傜偣鎬昏闃呴摼鎺?
+## 📌 全部节点总订阅链接
 
-| 瀹㈡埛绔?/ 鏍煎紡绫诲瀷 | 鑺傜偣鎬绘暟 | 鍏嶇炕 CDN 璁㈤槄鐩撮摼 (鍥藉唴鐩磋繛) | 瀹樻柟鍘熺敓 Raw 鐩撮摼 (寮€鍚唬鐞? |
+| 客户端 / 格式类型 | 节点总数 | 免翻 CDN 订阅直链 (国内直连) | 官方原生 Raw 直链 (开启代理) |
 | :--- | :---: | :--- | :--- |
-| 馃殌 **Clash (YAML 鏍煎紡)** | `{total_count}` | [鍏嶇炕 CDN 鐩撮摼](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/clash.yaml) | [瀹樻柟 Raw 鐩撮摼](https://raw.githubusercontent.com/{repo_name}/main/output/clash.yaml) |
-| 鈿?**V2RayN (Base64 鏍煎紡)** | `{total_count}` | [鍏嶇炕 CDN 鐩撮摼](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/v2ray.txt) | [瀹樻柟 Raw 鐩撮摼](https://raw.githubusercontent.com/{repo_name}/main/output/v2ray.txt) |
-| 馃摝 **sing-box (JSON 鏍煎紡)** | `{total_count}` | [鍏嶇炕 CDN 鐩撮摼](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/singbox.json) | [瀹樻柟 Raw 鐩撮摼](https://raw.githubusercontent.com/{repo_name}/main/output/singbox.json) |
+| 🚀 **Clash (YAML 格式)** | `{total_count}` | [免翻 CDN 直链](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/clash.yaml) | [官方 Raw 直链](https://raw.githubusercontent.com/{repo_name}/main/output/clash.yaml) |
+| ⚡ **V2RayN (Base64 格式)** | `{total_count}` | [免翻 CDN 直链](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/v2ray.txt) | [官方 Raw 直链](https://raw.githubusercontent.com/{repo_name}/main/output/v2ray.txt) |
+| 📦 **sing-box (JSON 格式)** | `{total_count}` | [免翻 CDN 直链](https://cdn.jsdelivr.net/gh/{repo_name}@main/output/singbox.json) | [官方 Raw 直链](https://raw.githubusercontent.com/{repo_name}/main/output/singbox.json) |
 
 ---
 
-## 馃彔 鎸夌収瀹跺鍒嗙被鑺傜偣璁㈤槄 (浣忓畢 IP 涓撳尯)
+## 🏠 按照家宽分类节点订阅 (住宅 IP 专区)
 
-> 瀹跺鍒ゅ畾鍏噸淇″彿: 鈶?ip-api.com `hosting` 瀛楁 鈶?`mobile` 绉诲姩缃戠粶瀛楁 鈶?Cloudflare/涓绘祦 CDN Anycast 缃戞姣斿 鈶?MaxMind GeoLite2 ASN 鐧?榛戝悕鍗?(瑕嗙洊 60+ 鍥藉涓绘祦姘戠敤杩愯惀鍟? 鈶?rDNS/ISP 鍚嶇О鐗瑰緛 鈶?Scamalytics 椋庢帶璇勫垎澶嶆牳 (fraud 鈮?5 闄嶇骇銆佲墺90 鍓旈櫎)銆傛帓闄ゆ墍鏈変簯涓绘満/鏁版嵁涓績/CDN 浠绘挱, 淇濈暀鐪熷疄姘戠敤瀹藉甫涓庣Щ鍔ㄧ綉缁溿€?
+> 家宽判定六重信号: ① ip-api.com `hosting` 字段 ② `mobile` 移动网络字段 ③ Cloudflare/主流 CDN Anycast 网段比对 ④ MaxMind GeoLite2 ASN 白/黑名单 (覆盖 60+ 国家主流民用运营商) ⑤ rDNS/ISP 名称特征 ⑥ Scamalytics 风控评分复核 (fraud ≥75 降级、≥90 剔除)。排除所有云主机/数据中心/CDN 任播, 保留真实民用宽带与移动网络。
 
-| 瀹跺鍦板尯 | 鑺傜偣鏁?| V2RayN 涓撳睘璁㈤槄 | Clash 涓撳睘璁㈤槄 | sing-box 涓撳睘璁㈤槄 |
+| 家宽地区 | 节点数 | V2RayN 专属订阅 | Clash 专属订阅 | sing-box 专属订阅 |
 | :--- | :---: | :---: | :---: | :---: |
 {res_table}
 
 ---
 
-## 馃椇锔?鎸夌収鍥藉鍒嗙被鑺傜偣璁㈤槄 (闈炲瀹?鏁版嵁涓績鑺傜偣)
+## 🗺️ 按照国家分类节点订阅 (非家宽/数据中心节点)
 
-| 鍦板尯/鍥藉 | 鑺傜偣鏁?| V2RayN 涓撳睘璁㈤槄 | Clash 涓撳睘璁㈤槄 | sing-box 涓撳睘璁㈤槄 |
+| 地区/国家 | 节点数 | V2RayN 专属订阅 | Clash 专属订阅 | sing-box 专属订阅 |
 | :--- | :---: | :---: | :---: | :---: |
 {normal_table}
 
 ---
 
-## 馃敀 绉佹湁浠撳簱锛圥rivate锛夋棤鎰熷厤缈昏闃呮柟妗?(鍩轰簬 Cloudflare Workers)
+## 🔒 私有仓库（Private）无感免翻订阅方案 (基于 Cloudflare Workers)
 
-> 濡傛灉浣犲笇鏈涘皢鏈?GitHub 浠撳簱璁剧疆涓?**Private (绉佹湁浠撳簱)** 淇濇姢鑺傜偣璧勪骇锛屽閮ㄥ鎴风鏃犳硶鐩存帴鎷夊彇鍘熺敓 Raw 鎴栧叕鍏?CDN 閾炬帴锛屽彲浠ラ€氳繃浠ヤ笅 Cloudflare Worker 鎼缓杞婚噺绾х瀵嗙綉鍏冲弽浠ｏ細
+> 如果你希望将本 GitHub 仓库设置为 **Private (私有仓库)** 保护节点资产，外部客户端无法直接拉取原生 Raw 或公共 CDN 链接，可以通过以下 Cloudflare Worker 搭建轻量级私密网关反代：
 
-### 1. 鑾峰彇 GitHub 姘镐箙涓汉浠ょ墝 (PAT)
-1. 杩涘叆 GitHub -> **Settings** -> **Developer Settings** -> **Personal access tokens (classic)**銆?
-2. 鐐瑰嚮 **Generate new token (classic)**锛屽嬀閫?`repo` 鏉冮檺锛屾湁鏁堟湡璁句负 `No expiration`锛堟案涓嶈繃鏈燂級銆?
-3. 澶嶅埗淇濆瓨鐢熸垚鐨勪互 `ghp_` 寮€澶寸殑 Token銆?
+### 1. 获取 GitHub 永久个人令牌 (PAT)
+1. 进入 GitHub -> **Settings** -> **Developer Settings** -> **Personal access tokens (classic)**。
+2. 点击 **Generate new token (classic)**，勾选 `repo` 权限，有效期设为 `No expiration`（永不过期）。
+3. 复制保存生成的以 `ghp_` 开头的 Token。
 
-### 2. 閮ㄧ讲 Cloudflare Worker
-鐧诲綍 Cloudflare Dashboard锛屽垱寤轰竴涓柊鐨?Worker锛屽鍒朵互涓嬭剼鏈矘璐村苟閮ㄧ讲锛堟妸 `OWNER`/`REPO`/`GITHUB_TOKEN` 鏀规垚浣犺嚜宸辩殑锛夛細
+### 2. 部署 Cloudflare Worker
+登录 Cloudflare Dashboard，创建一个新的 Worker，复制以下脚本粘贴并部署（把 `OWNER`/`REPO`/`GITHUB_TOKEN` 改成你自己的）：
 
 ```javascript
 export default {{
   async fetch(request) {{
-    const GITHUB_TOKEN = "ghp_浣犵殑GitHub姘镐箙璁块棶浠ょ墝";
+    const GITHUB_TOKEN = "ghp_你的GitHub永久访问令牌";
     const OWNER = "{owner}";
     const REPO = "{repo}";
     const BRANCH = "main";
@@ -2413,47 +2413,47 @@ export default {{
 }}
 ```
 
-### 3. 绉佹湁璁㈤槄閾炬帴鏄犲皠鏂瑰紡
-閮ㄧ讲鍚?Worker 浼氬垎閰嶄竴涓笓灞炲煙鍚嶏紙渚嬪 `my-sub.yourname.workers.dev`锛夛紝浣犵殑瀹㈡埛绔彲浠ョ洿鎺ユ棤鎰熻闃咃細
-* **鎬?V2RayN 璁㈤槄**: `https://浣犵殑鍩熷悕.workers.dev/v2ray.txt`
-* **鎬?Clash 璁㈤槄**: `https://浣犵殑鍩熷悕.workers.dev/clash.yaml`
-* **鎬?sing-box 璁㈤槄**: `https://浣犵殑鍩熷悕.workers.dev/singbox.json`
-* **鍙版咕瀹跺 V2RayN**: `https://浣犵殑鍩熷悕.workers.dev/residential-by-country/TW.txt`
-* **棣欐腐瀹跺 Clash**: `https://浣犵殑鍩熷悕.workers.dev/residential-by-country/clash-HK.yaml`
-* **鏃ユ湰瀹跺 sing-box**: `https://浣犵殑鍩熷悕.workers.dev/residential-by-country/singbox-JP.json`
+### 3. 私有订阅链接映射方式
+部署后 Worker 会分配一个专属域名（例如 `my-sub.yourname.workers.dev`），你的客户端可以直接无感订阅：
+* **总 V2RayN 订阅**: `https://你的域名.workers.dev/v2ray.txt`
+* **总 Clash 订阅**: `https://你的域名.workers.dev/clash.yaml`
+* **总 sing-box 订阅**: `https://你的域名.workers.dev/singbox.json`
+* **台湾家宽 V2RayN**: `https://你的域名.workers.dev/residential-by-country/TW.txt`
+* **香港家宽 Clash**: `https://你的域名.workers.dev/residential-by-country/clash-HK.yaml`
+* **日本家宽 sing-box**: `https://你的域名.workers.dev/residential-by-country/singbox-JP.json`
 
 ---
 
-## 猸?椤圭洰鐑害
+## ⭐ 项目热度
 
 [![Star History Chart](https://api.star-history.com/svg?repos={repo_name}&type=Date)](https://star-history.com/#{repo_name}&Date)
 
 ---
 
-## 馃洜锔?椤圭洰浣跨敤璇存槑
-1. **鑷姩鏇存柊鏈哄埗**锛欸itHub Actions 姣?6 灏忔椂鍏ㄨ嚜鍔ㄨ繍琛屽苟鍒锋柊涓婅堪鍏ㄩ儴璁㈤槄涓庢暟鎹€?
-2. **娴嬫椿鏍囧噯**锛氳妭鐐瑰繀椤婚€氳繃 鈶?绔彛棰勬 鈶?sing-box 瀹為檯闅ч亾 3 涓?generate_204 鎺㈡祴 鈶?鐪熷疄鍑哄彛 IP 绌块€忚幏鍙?鈶?Cloudflare 5MB 闄愭椂涓嬭浇 (鍚炲悙 鈮?70KB/s) 鈶?TLS 璇佷功鏍￠獙闈?MITM, 鏂瑰彲鍏ュ簱銆?
-3. **澶氬鎴风鍏煎**锛欳lash / v2rayN / sing-box 鍏ㄦ牸寮忚闃呫€?
+## 🛠️ 项目使用说明
+1. **自动更新机制**：GitHub Actions 每 6 小时全自动运行并刷新上述全部订阅与数据。
+2. **测活标准**：节点必须通过 ① 端口预检 ② sing-box 实际隧道 3 个 generate_204 探测 ③ 真实出口 IP 穿透获取 ④ Cloudflare 5MB 限时下载 (吞吐 ≥ 70KB/s) ⑤ TLS 证书校验非 MITM, 方可入库。
+3. **多客户端兼容**：Clash / v2rayN / sing-box 全格式订阅。
 """
     with open(os.path.join(BASEDIR, "README.md"), "w", encoding="utf-8") as f:
         f.write(readme)
-    print(f"[+] README.md 鏇存柊瀹屾瘯: 鎬昏妭鐐?{total_count}, 瀹跺 {res_count}")
+    print(f"[+] README.md 更新完毕: 总节点 {total_count}, 家宽 {res_count}")
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-# 涓绘祦绋?
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+# ═══════════════════════════════════════════N═══════════════════════
+# 主流程
+# ═══════════════════════════════════════════N═══════════════════════
 
 def main():
     t_start = time.time()
-    print(f"==== 鍏嶈垂鑺傜偣娴嬫椿璁㈤槄姹?v2 路 鍚姩浜?{datetime.now(timezone.utc).isoformat()} ====")
+    print(f"==== 免费节点测活订阅池 v2 · 启动于 {datetime.now(timezone.utc).isoformat()} ====")
     ensure_directories()
     setup_environment()
 
-    # 1. 鎶撳彇
+    # 1. 抓取
     raw_nodes = fetch_raw_nodes()
 
-    # 2. 瑙ｆ瀽
+    # 2. 解析
     candidates = []
     parse_fail = 0
     for uri in raw_nodes:
@@ -2462,16 +2462,16 @@ def main():
             parse_fail += 1
             continue
         outbound, server, port, proto = parsed
-        # 灞忚斀鍗犱綅/骞垮憡鑺傜偣
+        # 屏蔽占位/广告节点
         if BLACKLIST_NAME_HINTS.search(urllib.parse.unquote(uri.split("#", 1)[-1] if "#" in uri else "")):
             continue
         candidates.append((uri, outbound, server, port, proto))
 
-    # 2.5 鈽?娴嬪墠寮哄幓閲?(鍑嵁鎸囩汗鍘婚噸: 鍚?鍑嵁+鐩爣+鍗忚 鍙祴涓€娆? 缁撴灉鍥炲～鍏ㄩ儴閲嶅鑺傜偣)
-    #     key = (server, port, proto, 鍑嵁鎸囩汗): 鍑嵁涓嶅悓 鈫?鏈嶅姟绔牎楠岀粨鏋滃彲鑳戒笉鍚? 涓嶅彲鍚堝苟
-    #     鍑嵁鎸囩汗: uuid/password 鍚勫崗璁殑鏍稿績韬唤瀛楁 (vless uuid / vmess id+alterId /
-    #               trojan password / ss 2022瀵嗛挜 / hy2 auth / tuic uuid+passwd / anytls password)
-    #     瀹屽叏鐩稿悓 = 鍚屼竴鑺傜偣琚婧愰噸澶嶆敹褰?(鍏嶈垂姹犲父鎬? 30+ 浠戒笉鍚屽悕瀛? 鈫?鍙祴涓€娆?
+    # 2.5 ★ 测前强去重 (凭据指纹去重: 同 凭据+目标+协议 只测一次, 结果回填全部重复节点)
+    #     key = (server, port, proto, 凭据指纹): 凭据不同 → 服务端校验结果可能不同, 不可合并
+    #     凭据指纹: uuid/password 各协议的核心身份字段 (vless uuid / vmess id+alterId /
+    #               trojan password / ss 2022密钥 / hy2 auth / tuic uuid+passwd / anytls password)
+    #     完全相同 = 同一节点被多源重复收录 (免费池常态, 30+ 份不同名字) → 只测一次
     def cred_fingerprint(outbound: dict, proto: str) -> str:
         try:
             if proto == "vless":
@@ -2491,39 +2491,39 @@ def main():
             return json.dumps({k: v for k, v in outbound.items()
                               if k in ("uuid", "password", "user_id", "method")}, sort_keys=True)
         except Exception:
-            return ""  # 鎸囩汗澶辫触 鈫?涓嶅悎骞?(瀹佹參涓嶉敊)
+            return ""  # 指纹失败 → 不合并 (宁慢不错)
 
     seen_keys, deduped, dup_count = {}, [], 0
     for item in candidates:
         uri, outbound, server, port, proto = item
         key = (server.lower() if server else "", port, proto, cred_fingerprint(outbound, proto))
         if key in seen_keys:
-            seen_keys[key].append(uri)  # 璁板綍閲嶅 URI, 娴嬫椿鍚庡洖濉?
+            seen_keys[key].append(uri)  # 记录重复 URI, 测活后回填
             dup_count += 1
         else:
             seen_keys[key] = [uri]
             deduped.append(item)
     if dup_count:
-        print(f"[*] 娴嬪墠鍘婚噸(鍑嵁鎸囩汗): {len(candidates)} 鈫?{len(deduped)} (鍓旈櫎閲嶅 {dup_count} 鈥?缁撴灉灏嗗洖濉?")
-    DEDUP_MAP = seen_keys  # 渚涙祴娲诲悗鍥炲～ (鍏ㄥ眬)
+        print(f"[*] 测前去重(凭据指纹): {len(candidates)} → {len(deduped)} (剔除重复 {dup_count} — 结果将回填)")
+    DEDUP_MAP = seen_keys  # 供测活后回填 (全局)
     candidates = deduped
 
     proto_stat = {}
     for _, _, _, _, p in candidates:
         proto_stat[p] = proto_stat.get(p, 0) + 1
-    print(f"[*] 瑙ｆ瀽鎴愬姛(鍘婚噸鍚?: {len(candidates)} | 澶辫触 {parse_fail} | 鍗忚鍒嗗竷 {proto_stat}")
+    print(f"[*] 解析成功(去重后): {len(candidates)} | 失败 {parse_fail} | 协议分布 {proto_stat}")
 
     if not candidates:
-        print("[!] 鏃犲彲娴嬭妭鐐?(璁㈤槄婧愬叏閮ㄥけ鏁?) 鈥?淇濈暀涓婃 output, 涓嶈鐩栬闃呮枃浠?)
+        print("[!] 无可测节点 (订阅源全部失效?) — 保留上次 output, 不覆盖订阅文件")
         return
 
-    # 3. 绔彛棰勬
+    # 3. 端口预检
     candidates = prefilter_candidates(candidates)
 
-    # 4. 鐪熷疄娴嬫椿 (鍙祴鍘婚噸鍚庣殑浠ｈ〃鑺傜偣)
+    # 4. 真实测活 (只测去重后的代表节点)
     test_results = run_liveness_test(candidates)
 
-    # 4.5 鈽?閲嶅鑺傜偣缁撴灉鍥炲～: 鍚?鍑嵁+鐩爣 鐨勯噸澶?URI 缁ф壙娴嬫椿缁撴灉 (鍑嵁鐩稿悓 鈫?鏈嶅姟绔〃鐜颁竴鑷?
+    # 4.5 ★ 重复节点结果回填: 同 凭据+目标 的重复 URI 继承测活结果 (凭据相同 → 服务端表现一致)
     if DEDUP_MAP:
         result_by_key = {}
         for r in test_results:
@@ -2531,11 +2531,11 @@ def main():
             result_by_key[key] = r
         expanded = list(test_results)
         backfilled = 0
-        # 鍙嶅悜绱㈠紩: server:port:proto 鈫?鍘熷 fingerprint (浠?DEDUP_MAP 鐨?key 鐩存帴缁ф壙)
+        # 反向索引: server:port:proto → 原始 fingerprint (从 DEDUP_MAP 的 key 直接继承)
         for key, uris in DEDUP_MAP.items():
             if len(uris) <= 1:
                 continue
-            # 鐢?key 鐨勫墠涓夋 (server, port, proto) 鎵炬祴娲荤粨鏋?
+            # 用 key 的前三段 (server, port, proto) 找测活结果
             lookup = (key[0], key[1], key[2])
             r = result_by_key.get(lookup)
             if not r or not r.get("alive"):
@@ -2546,42 +2546,42 @@ def main():
                 expanded.append(clone)
                 backfilled += 1
         if backfilled:
-            print(f"[+] 閲嶅鑺傜偣鍥炲～: +{backfilled} (缁ф壙浠ｈ〃娴嬫椿缁撴灉)")
+            print(f"[+] 重复节点回填: +{backfilled} (继承代表测活结果)")
         test_results = expanded
 
-    # 5. 鈽?瀹跺閾惧紡澶嶆祴: 鐢ㄦ渶蹇瓨娲昏妭鐐瑰仛鍓嶇疆鍙岃烦澶嶆祴瀹跺鍊欓€?
-    #    (妯℃嫙鐢ㄦ埛 v2rayN 閾惧紡鍦烘櫙, 鍙岃烦澶辫触鐨勫瀹介檷绾ф櫘閫氬尯 鈥?鎻愰珮閾惧紡鍙敤鐜?
+    # 5. ★ 家宽链式复测: 用最快存活节点做前置双跳复测家宽候选
+    #    (模拟用户 v2rayN 链式场景, 双跳失败的家宽降级普通区 — 提高链式可用率)
     test_results = chain_retest(test_results)
 
-    # 6. 鍒嗙被 + 瀵煎嚭 (鏃犵湡娲昏妭鐐规椂淇濈暀涓婃 output, 涓嶅啓绌鸿闃呰鐩栫嚎涓婃暟鎹?
+    # 6. 分类 + 导出 (无真活节点时保留上次 output, 不写空订阅覆盖线上数据)
     if not test_results:
-        print("[!] 鍏ㄩ儴鑺傜偣娴嬫椿澶辫触 鈥?淇濈暀涓婃 output, 涓嶈鐩栬闃呮枃浠?)
+        print("[!] 全部节点测活失败 — 保留上次 output, 不覆盖订阅文件")
         return
     unique_nodes, residential, non_residential = classify_and_export(test_results)
     if not unique_nodes:
-        print("[!] 鍒嗙被鍚庢棤瀛樻椿鑺傜偣 鈥?淇濈暀涓婃 output")
+        print("[!] 分类后无存活节点 — 保留上次 output")
         return
     total, res = export_all(unique_nodes, residential, non_residential)
     update_readme(total, res)
 
 
-    # 缁熻鎶ュ憡
+    # 统计报告
     elapsed = time.time() - t_start
-    print("\n===== 杩愯鎶ュ憡 =====")
-    print(f"鎬昏€楁椂: {elapsed:.0f}s | 鎶撳彇 {len(raw_nodes)} 鈫?瑙ｆ瀽鎴愬姛 {len(candidates)} 鈫?鐪熸椿 {len(test_results)} 鈫?鍘婚噸鍚?{len(unique_nodes)} 鈫?瀹跺 {len(residential)}")
+    print("\n===== 运行报告 =====")
+    print(f"总耗时: {elapsed:.0f}s | 抓取 {len(raw_nodes)} → 解析成功 {len(candidates)} → 真活 {len(test_results)} → 去重后 {len(unique_nodes)} → 家宽 {len(residential)}")
     by_type = {}
     for n in unique_nodes:
         by_type[n["net_type"]] = by_type.get(n["net_type"], 0) + 1
-    print(f"鑺傜偣绫诲瀷鍒嗗竷: {by_type}")
+    print(f"节点类型分布: {by_type}")
     by_proto = {}
     for n in unique_nodes:
         by_proto[n["proto"]] = by_proto.get(n["proto"], 0) + 1
-    print(f"鍗忚鍒嗗竷(鍑哄簱): {by_proto}")
+    print(f"协议分布(出库): {by_proto}")
     by_country = {}
     for n in unique_nodes:
         by_country[n["country"]] = by_country.get(n["country"], 0) + 1
     top_c = sorted(by_country.items(), key=lambda x: -x[1])[:10]
-    print(f"鍥藉 Top10: {top_c}")
+    print(f"国家 Top10: {top_c}")
 
 
 if __name__ == "__main__":
