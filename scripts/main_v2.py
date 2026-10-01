@@ -2287,13 +2287,13 @@ def export_singbox_json(sb_nodes, filepath):
 # 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺怤鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
 
 def update_readme(total_count, res_count):
-    repo_name = os.environ.get("GITHUB_REPOSITORY", "georgezhou2024/reesub").strip()
+    repo_name = os.environ.get("GITHUB_REPOSITORY", "georgezhou2024/reesub-george").strip()
     cache_bust = ""
     # 绉佹湁鍖栭儴缃?Worker 鑴氭湰閲岀殑浠撳簱鍙傛暟 (榛樿鍊煎厹搴?
     try:
         owner, repo = repo_name.split("/", 1)
     except ValueError:
-        owner, repo = "georgezhou2024", "reesub"
+        owner, repo = "georgezhou2024", "reesub-george"
 
     def count_file(path):
         if not os.path.exists(path):
